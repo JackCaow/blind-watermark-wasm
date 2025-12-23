@@ -1,0 +1,44 @@
+{
+  "name": "blind-watermark-wasm",
+  "version": "1.0.0",
+  "description": "DWT-DCT-SVD based blind watermarking for images using WebAssembly",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "lib/blind_watermark.js",
+    "lib/blind_watermark.wasm"
+  ],
+  "scripts": {
+    "build:wasm": "./build.sh",
+    "build:ts": "tsup lib/index.ts --format cjs,esm --dts --clean",
+    "build": "npm run build:wasm && npm run build:ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "watermark",
+    "blind-watermark",
+    "steganography",
+    "image",
+    "dwt",
+    "dct",
+    "svd",
+    "wasm",
+    "webassembly",
+    "electron"
+  ],
+  "author": "JackCao",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JackCaow/blind-watermark-wasm.git"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
