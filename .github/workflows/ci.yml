@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "fix/**", "feat/**"]
+  pull_request:
+
+jobs:
+  # Fast, no-Emscripten check of the pure DWT-DCT-SVD core via the native harness.
+  native-core:
+    name: Native core checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Run native verification harness
+        run: bash script/run_verify.sh
+
+  # Builds the actual .wasm and exercises the embind bindings + full
+  # decode -> embed -> encode -> extract pipeline (covers the use-after-free,
+  # alpha, and d2 changes end to end).
+  wasm:
+    name: WASM build + round-trip test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest # pin to a specific emsdk release here for reproducible builds
+      - name: Show emcc version
+        run: emcc -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build WASM
+        run: npm run build:wasm
+      - name: Round-trip test (embed + extract)
+        run: node test.mjs
+
+  # Verifies the TypeScript wrapper / type definitions build.
+  ts-build:
+    name: TypeScript build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Build TypeScript
+        run: npm run build:ts
