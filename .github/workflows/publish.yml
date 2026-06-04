@@ -1,0 +1,32 @@
+name: Publish to npm
+
+# Publishes when a GitHub Release is published, or manually via "Run workflow".
+# Requires an automation token stored as the NPM_TOKEN repository secret.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest # pin to a specific emsdk release for reproducible builds
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        run: npm install
+      - name: Build (WASM + TypeScript)
+        run: npm run build
+      - name: Smoke-test the packed tarball
+        run: bash script/smoke-pack.sh
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
