@@ -7,12 +7,22 @@ import { BlindWatermark } from 'blind-watermark-wasm';
 const bwm = new BlindWatermark();
 const img = new Uint8Array(fs.readFileSync('test.png'));
 
+// Low-level explicit-length API
 const text = 'smoke';
 const { imageData, wmBitLength } = await bwm.embedString(img, text, 'png');
 const got = await bwm.extractString(imageData, wmBitLength);
-
 if (got !== text) {
-  console.error(`FAIL: extracted "${got}", expected "${text}"`);
+  console.error(`FAIL (embedString): extracted "${got}", expected "${text}"`);
   process.exit(1);
 }
-console.log('Smoke test PASSED: installed package round-trips correctly');
+
+// Self-describing API (no length needed)
+const sdText = 'smoke 自描述';
+const wm = await bwm.embed(img, sdText, 'png');
+const res = await bwm.extract(wm);
+if (!res || !res.valid || res.text !== sdText) {
+  console.error('FAIL (embed/extract):', res);
+  process.exit(1);
+}
+
+console.log('Smoke test PASSED: installed package round-trips correctly (both APIs)');

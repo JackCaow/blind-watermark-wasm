@@ -19,31 +19,45 @@ npm install blind-watermark-wasm
 
 ## Usage
 
-### Basic Usage
+### Recommended: self-describing watermark (no length to track)
+
+`embed` stores the payload length inside the image, so `extract` reads it back
+with **nothing but the image** — no `wmBitLength` to persist or pass around.
 
 ```typescript
 import { BlindWatermark } from 'blind-watermark-wasm';
 import fs from 'fs';
 
-// Create instance with default config
 const bwm = new BlindWatermark();
-
-// Read image
 const imageData = new Uint8Array(fs.readFileSync('image.png'));
 
-// Embed watermark
-const { imageData: watermarkedImage, wmBitLength } = await bwm.embedString(
-  imageData,
-  'Hello World',
-  'png'
-);
+// Embed (text or raw bytes)
+const watermarked = await bwm.embed(imageData, 'Hello World', 'png');
+fs.writeFileSync('watermarked.png', watermarked);
 
-// Save watermarked image
-fs.writeFileSync('watermarked.png', watermarkedImage);
+// Extract — no length needed
+const result = await bwm.extract(watermarked);
+if (result && result.valid) {
+  console.log(result.text); // "Hello World"  (result.bytes for raw payloads)
+}
 
-// Extract watermark
-const extractedText = await bwm.extractString(watermarkedImage, wmBitLength);
-console.log(extractedText); // "Hello World"
+// Just checking whether an image is watermarked?
+const { found } = await bwm.detect(watermarked);
+```
+
+`extract` returns `null` when no watermark is found (wrong password or none
+present), and `result.valid` is `false` if the payload checksum fails (e.g. heavy
+re-compression). Embed raw bytes by passing a `Uint8Array` instead of a string.
+
+### Low-level: explicit-length API
+
+`embedString`/`extractString` embed the bare payload and require you to keep the
+returned `wmBitLength` to extract later. Prefer `embed`/`extract` above unless you
+need to manage the bit length yourself.
+
+```typescript
+const { imageData: watermarked, wmBitLength } = await bwm.embedString(imageData, 'Hello World', 'png');
+const text = await bwm.extractString(watermarked, wmBitLength); // wmBitLength required
 ```
 
 ### With Custom Config
@@ -117,10 +131,18 @@ new BlindWatermark(config?: WatermarkConfig)
 
 #### Methods
 
-- `embedString(imageData, text, format?)` - Embed text watermark
-- `extractString(imageData, wmBitLength)` - Extract text watermark
+Self-describing (recommended — no length to track):
+
+- `embed(imageData, data, format?)` - Embed text or `Uint8Array`; returns the watermarked image bytes
+- `extract(imageData)` - Returns `ExtractResult | null` (`{ found, valid, version, isText, bytes, text? }`)
+- `detect(imageData)` - Returns `DetectResult` (`{ found, valid, version, isText, byteLength }`)
+
+Low-level (explicit length):
+
+- `embedString(imageData, text, format?)` - Embed text watermark, returns `{ imageData, wmBitLength }`
+- `extractString(imageData, wmBitLength)` - Extract text watermark (length required)
 - `embedBinary(imageData, bits, format?)` - Embed binary data
-- `extractBinary(imageData, wmBitLength)` - Extract binary data
+- `extractBinary(imageData, wmBitLength)` - Extract binary data (length required)
 
 ### `WatermarkConfig`
 
