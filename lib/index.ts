@@ -44,7 +44,7 @@ const defaultConfig: Required<WatermarkConfig> = {
   passwordWm: 1,
   passwordImg: 1,
   d1: 36,
-  d2: 20,
+  d2: 0, // secondary singular value off by default — see note in README (lowers robustness)
   blockSize: 4,
   dwtLevel: 1,
   redundancy: 3,

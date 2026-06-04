@@ -16,9 +16,9 @@ async function test() {
     const Module = await BlindWatermarkModule();
     console.log('WASM module loaded successfully!');
 
-    // Set default config
-    Module.setConfig(1, 1, 36, 20, 4, 1, 3);
-    console.log('Config set: passwordWm=1, passwordImg=1, d1=36, d2=20, blockSize=4, dwtLevel=1, redundancy=3');
+    // Set default config (d2=0: secondary singular value disabled, see README)
+    Module.setConfig(1, 1, 36, 0, 4, 1, 3);
+    console.log('Config set: passwordWm=1, passwordImg=1, d1=36, d2=0, blockSize=4, dwtLevel=1, redundancy=3');
 
     // Check if test image exists
     const testImagePath = path.join(__dirname, 'test.png');

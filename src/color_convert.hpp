@@ -8,14 +8,16 @@
 namespace bwm {
 
 /// Convert RGB image to YUV color space
-/// @param rgb Input RGB data (interleaved, 3 channels per pixel)
+/// @param rgb Input RGB(A) data (interleaved)
 /// @param width Image width
 /// @param height Image height
 /// @param Y Output Y channel (luminance)
 /// @param U Output U channel (chrominance)
 /// @param V Output V channel (chrominance)
+/// @param channels Bytes per pixel in `rgb` (3 = RGB, 4 = RGBA; alpha is ignored)
 void rgbToYuv(const std::vector<uint8_t>& rgb, int width, int height,
-              Eigen::MatrixXd& Y, Eigen::MatrixXd& U, Eigen::MatrixXd& V);
+              Eigen::MatrixXd& Y, Eigen::MatrixXd& U, Eigen::MatrixXd& V,
+              int channels = 3);
 
 /// Convert YUV to RGB image
 /// @param Y Input Y channel (luminance)

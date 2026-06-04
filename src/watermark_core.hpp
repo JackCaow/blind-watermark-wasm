@@ -14,7 +14,11 @@ struct WatermarkConfig {
     int passwordWm = 1;     // Password for watermark scrambling
     int passwordImg = 1;    // Password for image block scrambling
     double d1 = 36.0;       // Embedding strength for first singular value
-    double d2 = 20.0;       // Embedding strength for second singular value
+    // Embedding strength for the SECOND singular value. Disabled by default (0):
+    // s1 carries higher-frequency energy and is far more fragile under noise/JPEG
+    // than s0, so enabling it (d2 > 0) measurably lowers robustness. Kept as an
+    // opt-in knob; when > 0 its vote is combined softly (see extractBitsFromChannel).
+    double d2 = 0.0;
     int blockSize = 4;      // DCT block size (4 for images <= 1024px)
     int dwtLevel = 1;       // DWT decomposition level (1 level like original)
     int redundancy = 3;     // Bit redundancy factor for JPG robustness (each bit embedded N times)
@@ -78,6 +82,9 @@ private:
     Eigen::MatrixXd U_;  // U channel
     Eigen::MatrixXd V_;  // V channel
 
+    bool hasAlpha_ = false;       // carrier had an alpha channel
+    std::vector<uint8_t> alpha_;  // original alpha plane (W*H), preserved across embed
+
     // Watermark data
     std::vector<uint8_t> watermarkBits_;
     int wmImgHeight_ = 0;  // Original watermark image height
@@ -85,9 +92,6 @@ private:
 
     // Block indices for embedding
     std::vector<std::pair<int, int>> blockIndices_;
-
-    /// Scramble watermark bits using password
-    std::vector<uint8_t> scrambleBits(const std::vector<uint8_t>& bits, int password, bool inverse = false);
 
     /// Generate block indices based on password and actual LL dimensions
     void generateBlockIndices(int numBlocks, int password, int llRows, int llCols);

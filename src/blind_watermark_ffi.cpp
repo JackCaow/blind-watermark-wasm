@@ -407,7 +407,7 @@ BWM_EXPORT const char* bwm_get_error_message(int result) {
 }
 
 BWM_EXPORT const char* bwm_get_version() {
-    return "0.0.1";
+    return "1.0.0";
 }
 
 } // extern "C"
