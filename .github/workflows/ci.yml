@@ -17,11 +17,12 @@ jobs:
       - name: Run native verification harness
         run: bash script/run_verify.sh
 
-  # Builds the actual .wasm and exercises the embind bindings + full
-  # decode -> embed -> encode -> extract pipeline (covers the use-after-free,
-  # alpha, and d2 changes end to end).
-  wasm:
-    name: WASM build + round-trip test
+  # Builds the real .wasm + the TypeScript wrapper and exercises the embind
+  # bindings via the full decode -> embed -> encode -> extract pipeline (covers
+  # the use-after-free, alpha, and d2 changes end to end). build:ts must run
+  # after build:wasm because lib/index.ts imports the generated blind_watermark.js.
+  build-and-test:
+    name: Build (WASM + TS) + round-trip test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,21 +35,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Build WASM
-        run: npm run build:wasm
-      - name: Round-trip test (embed + extract)
-        run: node test.mjs
-
-  # Verifies the TypeScript wrapper / type definitions build.
-  ts-build:
-    name: TypeScript build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - name: Install dependencies
         run: npm install
-      - name: Build TypeScript
-        run: npm run build:ts
+      - name: Build (WASM + TypeScript)
+        run: npm run build
+      - name: Round-trip test (embed + extract)
+        run: node test.mjs
