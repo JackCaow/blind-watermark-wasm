@@ -1,11 +1,24 @@
 #include "dct.hpp"
 #include <cmath>
+#include <unordered_map>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace bwm {
+
+// DCT basis matrices only depend on the block size, which is fixed per run, so
+// build each size once and reuse it instead of recomputing cosines per block.
+// (Single-threaded WASM/native use; the cache lives for the module's lifetime.)
+static const Eigen::MatrixXd& cachedDctMatrix(int N) {
+    static std::unordered_map<int, Eigen::MatrixXd> cache;
+    auto it = cache.find(N);
+    if (it == cache.end()) {
+        it = cache.emplace(N, createDctMatrix(N)).first;
+    }
+    return it->second;
+}
 
 Eigen::MatrixXd createDctMatrix(int N) {
     Eigen::MatrixXd C(N, N);
@@ -69,10 +82,8 @@ Eigen::MatrixXd dct2d(const Eigen::MatrixXd& input) {
 
     // For efficiency, use matrix multiplication approach for larger matrices
     // DCT(A) = C * A * C^T where C is the DCT matrix
-
-    // Create DCT matrices
-    Eigen::MatrixXd C_rows = createDctMatrix(rows);
-    Eigen::MatrixXd C_cols = createDctMatrix(cols);
+    const Eigen::MatrixXd& C_rows = cachedDctMatrix(rows);
+    const Eigen::MatrixXd& C_cols = cachedDctMatrix(cols);
 
     // Apply 2D DCT: output = C_rows * input * C_cols^T
     return C_rows * input * C_cols.transpose();
@@ -82,9 +93,9 @@ Eigen::MatrixXd idct2d(const Eigen::MatrixXd& input) {
     int rows = static_cast<int>(input.rows());
     int cols = static_cast<int>(input.cols());
 
-    // Create IDCT matrices (transpose of DCT matrices)
-    Eigen::MatrixXd C_rows = createDctMatrix(rows);
-    Eigen::MatrixXd C_cols = createDctMatrix(cols);
+    // IDCT matrices are the transpose of the (cached) DCT matrices
+    const Eigen::MatrixXd& C_rows = cachedDctMatrix(rows);
+    const Eigen::MatrixXd& C_cols = cachedDctMatrix(cols);
 
     // Apply 2D IDCT: output = C_rows^T * input * C_cols
     return C_rows.transpose() * input * C_cols;

@@ -153,6 +153,16 @@ Eigen::MatrixXd idwt2d_multilevel(const std::vector<DwtResult>& levels) {
     // Reconstruct from deepest to shallowest
     for (int l = static_cast<int>(levels.size()) - 1; l >= 0; --l) {
         DwtResult dwt = levels[l];
+
+        // A deeper level whose own LL had an odd dimension reconstructs to an
+        // even-padded size that is up to one row/col larger than this level's
+        // stored LL. Crop it back so LL/LH/HL/HH line up before inverse-transforming.
+        int llRows = static_cast<int>(dwt.LL.rows());
+        int llCols = static_cast<int>(dwt.LL.cols());
+        if (current.rows() != llRows || current.cols() != llCols) {
+            current = current.block(0, 0, llRows, llCols).eval();
+        }
+
         dwt.LL = current;  // Replace LL with reconstructed from deeper level
         current = idwt2d(dwt);
     }

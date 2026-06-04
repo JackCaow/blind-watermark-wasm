@@ -49,6 +49,13 @@ bool loadImage(const std::string& filename, Image& img);
 /// @return true on success, false on failure
 bool loadImageFromMemory(const uint8_t* buffer, size_t length, Image& img);
 
+/// Load image from memory preserving alpha when present.
+/// @param buffer Pointer to image data (PNG, JPEG, BMP, WebP encoded)
+/// @param length Length of buffer in bytes
+/// @param img Output image: 4-channel RGBA if the source has alpha, else 3-channel RGB
+/// @return true on success, false on failure
+bool loadImageRGBAFromMemory(const uint8_t* buffer, size_t length, Image& img);
+
 /// Save image to file
 /// @param filename Path to output file (.png, .jpg, .bmp based on extension)
 /// @param img Input image

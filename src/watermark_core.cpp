@@ -9,19 +9,63 @@
 
 namespace bwm {
 
+// Apply (or undo) the password-seeded watermark permutation.
+// Templated so it can carry soft (double) confidence values on the way out, not
+// just hard bits on the way in. The permutation must be generated identically to
+// generateBlockIndices (same seed + std::shuffle) so embed and extract agree.
+template <typename T>
+static std::vector<T> permuteBits(const std::vector<T>& vals, int password, bool inverse) {
+    size_t n = vals.size();
+    if (n == 0) return vals;
+
+    std::vector<size_t> indices(n);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::mt19937 gen(static_cast<unsigned int>(password));
+    std::shuffle(indices.begin(), indices.end(), gen);
+
+    std::vector<T> result(n);
+    if (inverse) {
+        for (size_t i = 0; i < n; ++i) result[indices[i]] = vals[i];
+    } else {
+        for (size_t i = 0; i < n; ++i) result[i] = vals[indices[i]];
+    }
+    return result;
+}
+
 BlindWatermarkCore::BlindWatermarkCore(const WatermarkConfig& config)
-    : config_(config) {}
+    : config_(config) {
+    // Clamp nonsensical values that would otherwise divide by zero, produce NaNs,
+    // or silently embed nothing. Applies to every entry point (WASM + native FFI).
+    if (!(config_.d1 > 0.0))     config_.d1 = 36.0;  // used as fmod/floor divisor
+    if (config_.d2 < 0.0)        config_.d2 = 0.0;
+    if (config_.blockSize < 1)   config_.blockSize = 4;
+    if (config_.dwtLevel < 1)    config_.dwtLevel = 1;
+    if (config_.redundancy < 1)  config_.redundancy = 1;
+}
 
 void BlindWatermarkCore::setImage(const Image& img) {
-    if (img.empty() || img.channels != 3) {
-        throw std::runtime_error("Invalid image: must be RGB with 3 channels");
+    if (img.empty() || (img.channels != 3 && img.channels != 4)) {
+        throw std::runtime_error("Invalid image: must be RGB (3) or RGBA (4) channels");
     }
 
     imgWidth_ = img.width;
     imgHeight_ = img.height;
 
-    // Convert RGB to YUV
-    rgbToYuv(img.data, img.width, img.height, Y_, U_, V_);
+    // Preserve the alpha plane so transparency survives the round-trip; the
+    // watermark itself only touches luminance (Y).
+    hasAlpha_ = (img.channels == 4);
+    if (hasAlpha_) {
+        size_t n = static_cast<size_t>(img.width) * img.height;
+        alpha_.resize(n);
+        for (size_t p = 0; p < n; ++p) {
+            alpha_[p] = img.data[p * 4 + 3];
+        }
+    } else {
+        alpha_.clear();
+    }
+
+    // Convert RGB(A) to YUV (alpha ignored here, re-attached in embed())
+    rgbToYuv(img.data, img.width, img.height, Y_, U_, V_, img.channels);
 }
 
 void BlindWatermarkCore::setWatermarkText(const std::string& text) {
@@ -63,9 +107,9 @@ std::string BlindWatermarkCore::bitsToText(const std::vector<uint8_t>& bits) {
         for (int j = 0; j < 8; ++j) {
             c = (c << 1) | (bits[i + j] & 1);
         }
-        if (c != 0) {  // Skip null characters
-            text.push_back(static_cast<char>(c));
-        }
+        // Keep every decoded byte. Dropping '\0' would shorten/misalign the whole
+        // string on a single bit error, hiding the corruption instead of showing it.
+        text.push_back(static_cast<char>(c));
     }
     return text;
 }
@@ -112,36 +156,6 @@ Image BlindWatermarkCore::bitsToImage(const std::vector<uint8_t>& bits, int heig
     }
 
     return img;
-}
-
-std::vector<uint8_t> BlindWatermarkCore::scrambleBits(const std::vector<uint8_t>& bits, int password, bool inverse) {
-    if (bits.empty()) {
-        return bits;
-    }
-
-    size_t n = bits.size();
-    std::vector<size_t> indices(n);
-    std::iota(indices.begin(), indices.end(), 0);
-
-    // Generate permutation using password as seed
-    std::mt19937 gen(static_cast<unsigned int>(password));
-    std::shuffle(indices.begin(), indices.end(), gen);
-
-    std::vector<uint8_t> result(n);
-
-    if (inverse) {
-        // Inverse scramble
-        for (size_t i = 0; i < n; ++i) {
-            result[indices[i]] = bits[i];
-        }
-    } else {
-        // Forward scramble
-        for (size_t i = 0; i < n; ++i) {
-            result[i] = bits[indices[i]];
-        }
-    }
-
-    return result;
 }
 
 void BlindWatermarkCore::generateBlockIndices(int numBlocks, int password, int llRows, int llCols) {
@@ -207,7 +221,7 @@ void BlindWatermarkCore::embedBits(Eigen::MatrixXd& channel, const std::vector<u
     generateBlockIndices(static_cast<int>(redundantBits.size()), config_.passwordImg, llRows, llCols);
 
     // Scramble watermark bits
-    std::vector<uint8_t> scrambledBits = scrambleBits(redundantBits, config_.passwordWm);
+    std::vector<uint8_t> scrambledBits = permuteBits(redundantBits, config_.passwordWm, false);
 
     // Embed each bit using DCT-SVD
     for (size_t i = 0; i < scrambledBits.size(); ++i) {
@@ -277,10 +291,13 @@ std::vector<uint8_t> BlindWatermarkCore::extractBitsFromChannel(const Eigen::Mat
     // Generate block indices using actual LL dimensions
     generateBlockIndices(static_cast<int>(totalBits), config_.passwordImg, llRows, llCols);
 
-    std::vector<uint8_t> scrambledBits;
-    scrambledBits.reserve(totalBits);
+    // Per-block soft confidence values in [0, 1]. We deliberately keep these soft
+    // until after the redundant copies are combined: hard-thresholding here would
+    // make the secondary singular value (s1/d2, weighted 1 of 4) unable to ever
+    // change a per-block decision, so its vote would be silently discarded.
+    std::vector<double> softBits;
+    softBits.reserve(totalBits);
 
-    // Extract each bit
     for (size_t i = 0; i < totalBits; ++i) {
         int blockRow = blockIndices_[i].first * config_.blockSize;
         int blockCol = blockIndices_[i].second * config_.blockSize;
@@ -300,32 +317,31 @@ std::vector<uint8_t> BlindWatermarkCore::extractBitsFromChannel(const Eigen::Mat
         double s0 = S(0);
         double wm = (std::fmod(s0, config_.d1) > config_.d1 / 2.0) ? 1.0 : 0.0;
 
-        // Combine with second singular value if d2 > 0 (weighted voting)
+        // Combine with second singular value if d2 > 0 (3:1 soft vote).
+        // Result lands in {0, 0.25, 0.75, 1}; averaging across redundant copies
+        // below is what lets s1 break ties in favour of the correct bit.
         if (config_.d2 > 0 && S.size() > 1) {
             double s1 = S(1);
             double tmp = (std::fmod(s1, config_.d2) > config_.d2 / 2.0) ? 1.0 : 0.0;
-            wm = (wm * 3.0 + tmp) / 4.0;  // 3:1 weighted voting
+            wm = (wm * 3.0 + tmp) / 4.0;
         }
 
-        uint8_t bit = (wm > 0.5) ? 1 : 0;
-        scrambledBits.push_back(bit);
+        softBits.push_back(wm);
     }
 
-    // Unscramble bits
-    std::vector<uint8_t> unscrambledBits = scrambleBits(scrambledBits, config_.passwordWm, true);
+    // Unscramble the soft values (same permutation used when embedding).
+    std::vector<double> unscrambled = permuteBits(softBits, config_.passwordWm, true);
 
-    // Apply majority voting to combine redundant bits
+    // Average the redundant soft copies of each bit, then threshold once.
     std::vector<uint8_t> finalBits;
     finalBits.reserve(numBits);
     for (size_t i = 0; i < numBits; ++i) {
-        int count1 = 0;
+        double sum = 0.0;
         for (int r = 0; r < config_.redundancy; ++r) {
-            if (unscrambledBits[i * config_.redundancy + r] == 1) {
-                count1++;
-            }
+            sum += unscrambled[i * config_.redundancy + r];
         }
-        // Majority voting: if more than half are 1, result is 1
-        finalBits.push_back(count1 > config_.redundancy / 2 ? 1 : 0);
+        double avg = sum / config_.redundancy;
+        finalBits.push_back(avg >= 0.5 ? 1 : 0);
     }
 
     return finalBits;
@@ -346,11 +362,28 @@ Image BlindWatermarkCore::embed() {
     embedBits(Y_embedded, watermarkBits_);
 
     // Convert back to RGB
+    std::vector<uint8_t> rgb;
+    yuvToRgb(Y_embedded, U_, V_, rgb);
+
     Image result;
     result.width = imgWidth_;
     result.height = imgHeight_;
-    result.channels = 3;
-    yuvToRgb(Y_embedded, U_, V_, result.data);
+
+    if (hasAlpha_) {
+        // Interleave the watermarked RGB with the original alpha -> RGBA output.
+        result.channels = 4;
+        size_t n = static_cast<size_t>(imgWidth_) * imgHeight_;
+        result.data.resize(n * 4);
+        for (size_t p = 0; p < n; ++p) {
+            result.data[p * 4 + 0] = rgb[p * 3 + 0];
+            result.data[p * 4 + 1] = rgb[p * 3 + 1];
+            result.data[p * 4 + 2] = rgb[p * 3 + 2];
+            result.data[p * 4 + 3] = alpha_[p];
+        }
+    } else {
+        result.channels = 3;
+        result.data = std::move(rgb);
+    }
 
     return result;
 }
@@ -367,13 +400,13 @@ Image BlindWatermarkCore::extractImage(const Image& img, int wmHeight, int wmWid
 }
 
 std::vector<uint8_t> BlindWatermarkCore::extractBits(const Image& img, size_t wmLength) {
-    if (img.empty() || img.channels != 3) {
-        throw std::runtime_error("Invalid image: must be RGB with 3 channels");
+    if (img.empty() || (img.channels != 3 && img.channels != 4)) {
+        throw std::runtime_error("Invalid image: must be RGB (3) or RGBA (4) channels");
     }
 
-    // Convert RGB to YUV
+    // Convert RGB(A) to YUV (alpha ignored for extraction)
     Eigen::MatrixXd Y, U, V;
-    rgbToYuv(img.data, img.width, img.height, Y, U, V);
+    rgbToYuv(img.data, img.width, img.height, Y, U, V, img.channels);
 
     // Update dimensions for block index generation
     imgWidth_ = img.width;

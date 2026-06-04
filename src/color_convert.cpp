@@ -4,14 +4,15 @@
 namespace bwm {
 
 void rgbToYuv(const std::vector<uint8_t>& rgb, int width, int height,
-              Eigen::MatrixXd& Y, Eigen::MatrixXd& U, Eigen::MatrixXd& V) {
+              Eigen::MatrixXd& Y, Eigen::MatrixXd& U, Eigen::MatrixXd& V,
+              int channels) {
     Y.resize(height, width);
     U.resize(height, width);
     V.resize(height, width);
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            size_t idx = static_cast<size_t>(y * width + x) * 3;
+            size_t idx = static_cast<size_t>(y * width + x) * channels;
             double r = rgb[idx];
             double g = rgb[idx + 1];
             double b = rgb[idx + 2];

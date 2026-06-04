@@ -115,6 +115,59 @@ bool loadImageFromMemory(const uint8_t* buffer, size_t length, Image& img) {
     return true;
 }
 
+bool loadImageRGBAFromMemory(const uint8_t* buffer, size_t length, Image& img) {
+#ifdef BWM_HAVE_WEBP
+    if (isWebP(buffer, length)) {
+        WebPBitstreamFeatures features;
+        if (WebPGetFeatures(buffer, length, &features) != VP8_STATUS_OK) {
+            return false;
+        }
+        int width = features.width;
+        int height = features.height;
+        if (features.has_alpha) {
+            uint8_t* data = WebPDecodeRGBA(buffer, length, &width, &height);
+            if (!data) return false;
+            img.width = width;
+            img.height = height;
+            img.channels = 4;
+            img.data.assign(data, data + static_cast<size_t>(width) * height * 4);
+            WebPFree(data);
+        } else {
+            uint8_t* data = WebPDecodeRGB(buffer, length, &width, &height);
+            if (!data) return false;
+            img.width = width;
+            img.height = height;
+            img.channels = 3;
+            img.data.assign(data, data + static_cast<size_t>(width) * height * 3);
+            WebPFree(data);
+        }
+        return true;
+    }
+#endif
+
+    // Probe the source channel count; load RGBA only when alpha is actually present
+    // (comp 2 = gray+alpha, comp 4 = RGBA), otherwise stick to compact RGB.
+    int width, height, comp;
+    if (!stbi_info_from_memory(buffer, static_cast<int>(length), &width, &height, &comp)) {
+        comp = 3;  // fall back to a plain RGB load attempt
+    }
+    int desired = (comp == 2 || comp == 4) ? 4 : 3;
+
+    unsigned char* data = stbi_load_from_memory(
+        buffer, static_cast<int>(length), &width, &height, &comp, desired);
+    if (!data) {
+        return false;
+    }
+
+    img.width = width;
+    img.height = height;
+    img.channels = desired;
+    img.data.assign(data, data + static_cast<size_t>(width) * height * desired);
+
+    stbi_image_free(data);
+    return true;
+}
+
 bool loadGrayscaleImage(const std::string& filename, Image& img) {
     int width, height, channels;
     // Force load as grayscale (1 channel)

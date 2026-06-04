@@ -9,8 +9,43 @@
 using namespace emscripten;
 using namespace bwm;
 
-// Global config
+// Global config, set via setConfig() immediately before each embed/extract call.
+// Safe because WASM runs single-threaded and the JS wrapper always pairs
+// setConfig() with its operation synchronously (no await between them), so calls
+// never interleave. Kept global to avoid widening every exported function's
+// signature; values are sanitised in the BlindWatermarkCore constructor.
 static WatermarkConfig g_config;
+
+// Copy bytes into a JS-owned Uint8Array.
+//
+// IMPORTANT: typed_memory_view returns a *view* over the WASM heap, not a copy.
+// Returning such a view directly is a use-after-free: the backing std::vector is
+// destroyed when the function returns, and with ALLOW_MEMORY_GROWTH the heap can
+// be detached entirely, invalidating the view. We copy into an array that JS owns
+// while the source vector is still alive.
+static val toUint8Array(const std::vector<uint8_t>& bytes) {
+    val view = val(typed_memory_view(bytes.size(), bytes.data()));
+    val out = val::global("Uint8Array").new_(static_cast<unsigned>(bytes.size()));
+    out.call<void>("set", view);
+    return out;
+}
+
+// JPEG has no alpha channel; flatten RGBA -> RGB so a watermarked image with
+// transparency still encodes (PNG/WebP keep the alpha as-is).
+static Image stripAlphaForJpeg(Image img, const std::string& fmt) {
+    if (fmt != "jpg" || img.channels != 4) {
+        return img;
+    }
+    Image rgb;
+    rgb.allocate(img.width, img.height, 3);
+    size_t n = static_cast<size_t>(img.width) * img.height;
+    for (size_t p = 0; p < n; ++p) {
+        rgb.data[p * 3 + 0] = img.data[p * 4 + 0];
+        rgb.data[p * 3 + 1] = img.data[p * 4 + 1];
+        rgb.data[p * 3 + 2] = img.data[p * 4 + 2];
+    }
+    return rgb;
+}
 
 void setConfig(int passwordWm, int passwordImg, double d1, double d2, int blockSize, int dwtLevel, int redundancy) {
     g_config.passwordWm = passwordWm;
@@ -28,9 +63,9 @@ val embedStringWatermarkBytes(val imageDataVal, const std::string& watermarkText
         // Convert JavaScript Uint8Array to std::vector<uint8_t>
         std::vector<uint8_t> imageBytes = convertJSArrayToNumberVector<uint8_t>(imageDataVal);
 
-        // Decode image
+        // Decode image (preserve alpha so transparency survives the round-trip)
         Image img;
-        if (!loadImageFromMemory(imageBytes.data(), imageBytes.size(), img)) {
+        if (!loadImageRGBAFromMemory(imageBytes.data(), imageBytes.size(), img)) {
             val errorObj = val::object();
             errorObj.set("error", val(std::string("Failed to decode image")));
             return errorObj;
@@ -47,6 +82,7 @@ val embedStringWatermarkBytes(val imageDataVal, const std::string& watermarkText
         std::vector<uint8_t> outBytes;
         std::string format = outputFormat;
         if (format == "jpeg") format = "jpg";
+        result = stripAlphaForJpeg(std::move(result), format);
 
         if (!encodeImage(result, format, outBytes, 95)) {
             val errorObj = val::object();
@@ -59,7 +95,7 @@ val embedStringWatermarkBytes(val imageDataVal, const std::string& watermarkText
 
         // Return result object with Uint8Array
         val resultObj = val::object();
-        resultObj.set("imageData", val(typed_memory_view(outBytes.size(), outBytes.data())));
+        resultObj.set("imageData", toUint8Array(outBytes));
         resultObj.set("wmBitLength", val((int)wmBitLength));
 
         return resultObj;
@@ -98,9 +134,9 @@ val embedBinaryWatermarkBytes(val imageDataVal, const std::string& watermarkBits
         // Convert JavaScript Uint8Array to std::vector<uint8_t>
         std::vector<uint8_t> imageBytes = convertJSArrayToNumberVector<uint8_t>(imageDataVal);
 
-        // Decode image
+        // Decode image (preserve alpha so transparency survives the round-trip)
         Image img;
-        if (!loadImageFromMemory(imageBytes.data(), imageBytes.size(), img)) {
+        if (!loadImageRGBAFromMemory(imageBytes.data(), imageBytes.size(), img)) {
             val errorObj = val::object();
             errorObj.set("error", val(std::string("Failed to decode image")));
             return errorObj;
@@ -124,6 +160,7 @@ val embedBinaryWatermarkBytes(val imageDataVal, const std::string& watermarkBits
         std::vector<uint8_t> outBytes;
         std::string format = outputFormat;
         if (format == "jpeg") format = "jpg";
+        result = stripAlphaForJpeg(std::move(result), format);
 
         if (!encodeImage(result, format, outBytes, 95)) {
             val errorObj = val::object();
@@ -133,7 +170,7 @@ val embedBinaryWatermarkBytes(val imageDataVal, const std::string& watermarkBits
 
         // Return result
         val resultObj = val::object();
-        resultObj.set("imageData", val(typed_memory_view(outBytes.size(), outBytes.data())));
+        resultObj.set("imageData", toUint8Array(outBytes));
         resultObj.set("wmBitLength", val((int)bits.size()));
 
         return resultObj;

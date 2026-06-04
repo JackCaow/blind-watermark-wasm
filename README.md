@@ -8,6 +8,7 @@ DWT-DCT-SVD based blind watermarking for images using WebAssembly. Works in brow
 - **Robust algorithm**: DWT-DCT-SVD with redundancy for JPEG compression resistance
 - **Cross-platform**: Works in browsers, Node.js, and Electron
 - **Multiple formats**: Supports PNG, JPEG, and WebP
+- **Transparency preserved**: RGBA inputs keep their alpha channel (PNG/WebP output; JPEG has no alpha and is flattened to RGB)
 - **TypeScript support**: Full type definitions included
 
 ## Installation
@@ -128,10 +129,15 @@ new BlindWatermark(config?: WatermarkConfig)
 | passwordWm | number | 1 | Watermark scrambling password |
 | passwordImg | number | 1 | Block selection password |
 | d1 | number | 36 | Primary quantization step |
-| d2 | number | 20 | Secondary quantization step |
+| d2 | number | 0 | Secondary quantization step (opt-in; see note) |
 | blockSize | number | 4 | DCT block size |
 | dwtLevel | number | 1 | DWT decomposition level |
 | redundancy | number | 3 | Bit redundancy for robustness |
+
+> **Note on `d2`:** The secondary singular value carries higher-frequency energy and
+> is much more fragile under noise/JPEG than the primary one. Embedding into it
+> (`d2 > 0`) measurably *lowers* extraction robustness, so it is disabled by default.
+> Leave it at `0` unless you have a specific reason and have benchmarked your case.
 
 ## Building from Source
 
