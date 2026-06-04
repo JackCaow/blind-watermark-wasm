@@ -6,14 +6,14 @@
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "files": [
-    "dist",
-    "lib/blind_watermark.js",
-    "lib/blind_watermark.wasm"
+    "dist"
   ],
   "scripts": {
     "build:wasm": "./build.sh",
-    "build:ts": "tsup lib/index.ts --format cjs,esm --dts --clean",
-    "build": "npm run build:wasm && npm run build:ts",
+    "build:ts": "tsup lib/index.ts --format cjs,esm --dts --clean --external ./blind_watermark.js",
+    "build:copy": "node script/copy-wasm-to-dist.mjs",
+    "build": "npm run build:wasm && npm run build:ts && npm run build:copy",
+    "smoke": "bash script/smoke-pack.sh",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
