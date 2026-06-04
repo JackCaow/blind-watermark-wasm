@@ -210,10 +210,84 @@ std::string extractBinaryWatermarkBytes(val imageDataVal, int wmBitLength) {
     }
 }
 
+// Embed a self-describing payload (header + payload) so extraction needs no length.
+// payloadVal is a Uint8Array; isText tags it as UTF-8 for the caller's benefit.
+val embedSelfDescribingBytes(val imageDataVal, val payloadVal, bool isText, const std::string& outputFormat) {
+    try {
+        std::vector<uint8_t> imageBytes = convertJSArrayToNumberVector<uint8_t>(imageDataVal);
+
+        Image img;
+        if (!loadImageRGBAFromMemory(imageBytes.data(), imageBytes.size(), img)) {
+            val errorObj = val::object();
+            errorObj.set("error", val(std::string("Failed to decode image")));
+            return errorObj;
+        }
+
+        std::vector<uint8_t> payload = convertJSArrayToNumberVector<uint8_t>(payloadVal);
+
+        BlindWatermarkCore core(g_config);
+        core.setImage(img);
+        Image result = core.embedSelfDescribing(payload, isText);
+
+        std::vector<uint8_t> outBytes;
+        std::string format = outputFormat;
+        if (format == "jpeg") format = "jpg";
+        result = stripAlphaForJpeg(std::move(result), format);
+
+        if (!encodeImage(result, format, outBytes, 95)) {
+            val errorObj = val::object();
+            errorObj.set("error", val(std::string("Failed to encode image")));
+            return errorObj;
+        }
+
+        val resultObj = val::object();
+        resultObj.set("imageData", toUint8Array(outBytes));
+        return resultObj;
+    } catch (const std::exception& e) {
+        val errorObj = val::object();
+        errorObj.set("error", val(std::string(e.what())));
+        return errorObj;
+    }
+}
+
+// Extract a self-describing payload without knowing its length. Returns
+// { found, valid, version, isText, payload(Uint8Array) } (or { found:false, error }).
+val extractSelfDescribingBytes(val imageDataVal) {
+    try {
+        std::vector<uint8_t> imageBytes = convertJSArrayToNumberVector<uint8_t>(imageDataVal);
+
+        Image img;
+        if (!loadImageFromMemory(imageBytes.data(), imageBytes.size(), img)) {
+            val o = val::object();
+            o.set("found", val(false));
+            o.set("error", val(std::string("Failed to decode image")));
+            return o;
+        }
+
+        BlindWatermarkCore core(g_config);
+        ExtractResult r = core.extractSelfDescribing(img);
+
+        val o = val::object();
+        o.set("found", val(r.found));
+        o.set("valid", val(r.valid));
+        o.set("version", val(r.version));
+        o.set("isText", val(r.isText));
+        o.set("payload", toUint8Array(r.payload));
+        return o;
+    } catch (const std::exception& e) {
+        val o = val::object();
+        o.set("found", val(false));
+        o.set("error", val(std::string(e.what())));
+        return o;
+    }
+}
+
 EMSCRIPTEN_BINDINGS(blind_watermark) {
     function("setConfig", &setConfig);
     function("embedStringWatermark", &embedStringWatermarkBytes);
     function("extractStringWatermark", &extractStringWatermarkBytes);
     function("embedBinaryWatermark", &embedBinaryWatermarkBytes);
     function("extractBinaryWatermark", &extractBinaryWatermarkBytes);
+    function("embedSelfDescribing", &embedSelfDescribingBytes);
+    function("extractSelfDescribing", &extractSelfDescribingBytes);
 }

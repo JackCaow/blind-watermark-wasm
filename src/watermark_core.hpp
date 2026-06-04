@@ -24,6 +24,15 @@ struct WatermarkConfig {
     int redundancy = 3;     // Bit redundancy factor for JPG robustness (each bit embedded N times)
 };
 
+/// Result of a self-describing extraction (no payload length needed up front).
+struct ExtractResult {
+    bool found = false;               // a watermark with the matching password was detected (header magic ok)
+    bool valid = false;               // payload checksum (CRC-16) matched
+    int version = 0;                  // payload format version read from the header
+    bool isText = false;              // payload was embedded as UTF-8 text
+    std::vector<uint8_t> payload;     // raw payload bytes (UTF-8 if isText)
+};
+
 /// Blind watermark class using DWT-DCT-SVD algorithm
 class BlindWatermarkCore {
 public:
@@ -72,6 +81,18 @@ public:
     /// @return Extracted bits
     std::vector<uint8_t> extractBits(const Image& img, size_t wmLength);
 
+    /// Embed a self-describing payload (header + payload) so extraction needs no
+    /// length up front. Requires setImage() first.
+    /// @param payload Raw bytes to embed
+    /// @param isText  Tag the payload as UTF-8 text (affects how callers decode it)
+    /// @return Watermarked image
+    Image embedSelfDescribing(const std::vector<uint8_t>& payload, bool isText);
+
+    /// Extract a self-describing payload without knowing its length.
+    /// @param img Watermarked image
+    /// @return Result with found/valid flags and the payload (see ExtractResult)
+    ExtractResult extractSelfDescribing(const Image& img);
+
 private:
     WatermarkConfig config_;
 
@@ -96,11 +117,33 @@ private:
     /// Generate block indices based on password and actual LL dimensions
     void generateBlockIndices(int numBlocks, int password, int llRows, int llCols);
 
+    /// Build the full deterministic (password-shuffled) block order for an LL plane.
+    /// A prefix of this order is stable regardless of how many blocks are used,
+    /// which is what lets a fixed-size header be read before the payload length.
+    std::vector<std::pair<int, int>> buildBlockOrder(int password, int llRows, int llCols) const;
+
+    /// Embed one decided bit into the QIM block at (blockRow, blockCol).
+    void embedQimBlock(Eigen::MatrixXd& LL, int blockRow, int blockCol, uint8_t bit) const;
+
+    /// Read the soft QIM confidence (in [0,1]) from the block at (blockRow, blockCol).
+    double readQimBlockSoft(const Eigen::MatrixXd& LL, int blockRow, int blockCol) const;
+
+    /// Embed `bits` as a redundant+scrambled chunk into `order` starting at blockOffset.
+    void embedChunk(Eigen::MatrixXd& LL, const std::vector<std::pair<int, int>>& order,
+                    size_t blockOffset, const std::vector<uint8_t>& bits) const;
+
+    /// Read `numBits` logical bits from `order` starting at blockOffset.
+    std::vector<uint8_t> readChunk(const Eigen::MatrixXd& LL, const std::vector<std::pair<int, int>>& order,
+                                   size_t blockOffset, size_t numBits) const;
+
     /// Embed bits into DWT-DCT-SVD domain
     void embedBits(Eigen::MatrixXd& channel, const std::vector<uint8_t>& bits);
 
     /// Extract bits from DWT-DCT-SVD domain
     std::vector<uint8_t> extractBitsFromChannel(const Eigen::MatrixXd& channel, size_t numBits);
+
+    /// Assemble the final Image from a watermarked Y channel (+ stored U/V/alpha).
+    Image assembleResult(const Eigen::MatrixXd& Yembedded) const;
 
     /// Text to bits conversion
     static std::vector<uint8_t> textToBits(const std::string& text);

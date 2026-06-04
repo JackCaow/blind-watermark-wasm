@@ -228,6 +228,73 @@ int main() {
         failures += !ok;
     }
 
+    // ---- Test 7: self-describing text round-trip WITHOUT a length ----
+    {
+        WatermarkConfig cfg;
+        BlindWatermarkCore core(cfg);
+        core.setImage(base);
+        std::string text = "Self-describing 自描述 \xF0\x9F\x8E\x89";  // ASCII + CJK + emoji
+        std::vector<uint8_t> payload(text.begin(), text.end());
+        Image embedded = core.embedSelfDescribing(payload, true);
+
+        BlindWatermarkCore ex(cfg);
+        ExtractResult r = ex.extractSelfDescribing(embedded);
+        std::string got(r.payload.begin(), r.payload.end());
+        bool ok = r.found && r.valid && r.isText && got == text;
+        printf("[7] self-describing text (no length): %s  found=%d valid=%d isText=%d \"%s\"\n",
+               ok ? "PASS" : "FAIL", r.found, r.valid, r.isText, got.c_str());
+        failures += !ok;
+    }
+
+    // ---- Test 8: detect() distinguishes clean vs watermarked ----
+    {
+        WatermarkConfig cfg;
+        BlindWatermarkCore ex(cfg);
+        ExtractResult clean = ex.extractSelfDescribing(base);  // base is unwatermarked
+
+        BlindWatermarkCore core(cfg);
+        core.setImage(base);
+        Image wm = core.embedSelfDescribing({'h', 'i'}, false);
+        ExtractResult got = ex.extractSelfDescribing(wm);
+
+        bool ok = (!clean.found) && got.found && got.valid;
+        printf("[8] detect clean vs watermarked: %s  (clean.found=%d wm.found=%d)\n",
+               ok ? "PASS" : "FAIL", clean.found, got.found);
+        failures += !ok;
+    }
+
+    // ---- Test 9: wrong password -> not found ----
+    {
+        WatermarkConfig cfg;
+        BlindWatermarkCore core(cfg);
+        core.setImage(base);
+        Image wm = core.embedSelfDescribing({'s', 'e', 'c', 'r', 'e', 't'}, false);
+
+        WatermarkConfig wrong = cfg;
+        wrong.passwordImg = 999;  // wrong block order -> header garbled
+        BlindWatermarkCore ex(wrong);
+        ExtractResult r = ex.extractSelfDescribing(wm);
+        bool ok = !r.found;
+        printf("[9] wrong password -> not found: %s  (found=%d)\n", ok ? "PASS" : "FAIL", r.found);
+        failures += !ok;
+    }
+
+    // ---- Test 10: self-describing binary round-trip ----
+    {
+        WatermarkConfig cfg;
+        BlindWatermarkCore core(cfg);
+        core.setImage(base);
+        std::vector<uint8_t> bin = {0x00, 0xFF, 0x42, 0x7E, 0x01, 0x80};
+        Image wm = core.embedSelfDescribing(bin, false);
+
+        BlindWatermarkCore ex(cfg);
+        ExtractResult r = ex.extractSelfDescribing(wm);
+        bool ok = r.found && r.valid && !r.isText && r.payload == bin;
+        printf("[10] self-describing binary round-trip: %s  found=%d valid=%d bytes=%zu\n",
+               ok ? "PASS" : "FAIL", r.found, r.valid, r.payload.size());
+        failures += !ok;
+    }
+
     printf("\n%s\n", failures == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
     return failures == 0 ? 0 : 1;
 }

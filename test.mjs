@@ -72,7 +72,39 @@ async function test() {
         console.log('\n✗ Test FAILED! Extracted text does not match.');
         console.log(`  Expected: "${watermarkText}"`);
         console.log(`  Got: "${extractedText}"`);
+        process.exitCode = 1;
+    }
+
+    // --- Self-describing API: extract WITHOUT knowing the length ---
+    console.log('\n--- Self-describing watermark ---');
+    const sdText = 'Self-describing 自描述!';
+    const sdPayload = new TextEncoder().encode(sdText);
+
+    const sdEmbed = Module.embedSelfDescribing(imageData, sdPayload, true, 'png');
+    if (sdEmbed.error) {
+        console.log('✗ Self-describing embed error:', sdEmbed.error);
+        process.exitCode = 1;
+        return;
+    }
+    const sdImage = new Uint8Array(sdEmbed.imageData);
+    const sd = Module.extractSelfDescribing(sdImage);
+    const sdGot = new TextDecoder().decode(new Uint8Array(sd.payload));
+    console.log(`Extracted (no length): found=${sd.found} valid=${sd.valid} isText=${sd.isText} -> "${sdGot}"`);
+
+    if (sd.found && sd.valid && sd.isText && sdGot === sdText) {
+        console.log('✓ Self-describing PASSED (no length needed).');
+    } else {
+        console.log('✗ Self-describing FAILED.');
+        process.exitCode = 1;
+    }
+
+    // A clean (unwatermarked) image must report not-found.
+    const clean = Module.extractSelfDescribing(imageData);
+    console.log(`Clean-image detect: found=${clean.found} (expected false)`);
+    if (clean.found) {
+        console.log('✗ False positive on clean image.');
+        process.exitCode = 1;
     }
 }
 
-test().catch(console.error);
+test().catch((e) => { console.error(e); process.exitCode = 1; });
