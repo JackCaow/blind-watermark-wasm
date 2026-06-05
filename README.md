@@ -161,6 +161,37 @@ Low-level (explicit length):
 > (`d2 > 0`) measurably *lowers* extraction robustness, so it is disabled by default.
 > Leave it at `0` unless you have a specific reason and have benchmarked your case.
 
+## Robustness
+
+Measured on a 512×512 test image, 41-byte payload, default config (run it yourself with
+`bash script/run_bench.sh`). BER = bit-error rate of the recovered payload.
+
+| Transform | Result | BER |
+|-----------|--------|-----|
+| PNG re-save (lossless) | recovered | 0% |
+| JPEG q=95 … q=60 | recovered (CRC ok) | 0% |
+| JPEG q=50 | corrupt (CRC catches it) | ~0.3% |
+| JPEG q=40 | unreadable | — |
+| Downscale 50% then upscale | unreadable | — |
+| Resize to 90% | unreadable | — |
+
+So the watermark reliably survives PNG re-saves and JPEG down to roughly **quality 60**,
+and the CRC flags corruption instead of returning silently-wrong bytes. Numbers vary with
+image content; benchmark your own assets.
+
+## Limitations
+
+- **Not resilient to geometric changes.** The block grid is locked to the image
+  dimensions, so **resize, crop, and rotation destroy the watermark** — even resizing
+  back to the original size. Embed *after* all resizing, and re-embed if you re-scale.
+  This rules out the "post to a platform that re-scales everything, then verify" use case.
+- **Not encryption.** The password only scrambles bit placement; the payload is embedded
+  as plaintext bits. Encrypt the payload yourself before embedding if it is sensitive.
+- **Not tamper-proof.** The CRC-16 detects accidental corruption, not forgery. For
+  provenance you trust, sign the payload (e.g. HMAC) before embedding.
+- **Image size cap.** Inputs above ~10 megapixels are rejected with a catchable error
+  (the floating-point transforms would otherwise exhaust the 1 GB wasm heap).
+
 ## Building from Source
 
 Requires Emscripten SDK.

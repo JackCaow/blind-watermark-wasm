@@ -93,6 +93,11 @@ public:
     /// @return Result with found/valid flags and the payload (see ExtractResult)
     ExtractResult extractSelfDescribing(const Image& img);
 
+    /// The fixed, password-seeded block permutation used internally. Exposed so the
+    /// deterministic ordering can be reproduced and pinned by tests.
+    /// @return the shuffled sequence of indices [0, count)
+    static std::vector<size_t> pinnedPermutation(int password, size_t count);
+
 private:
     WatermarkConfig config_;
 
