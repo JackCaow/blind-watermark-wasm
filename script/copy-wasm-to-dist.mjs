@@ -1,19 +1,24 @@
-// Copy the Emscripten glue + wasm next to the bundled dist entry.
+// Copy the Emscripten glue next to the bundled dist entry.
 //
 // build:ts keeps `./blind_watermark.js` external (not bundled), so the published
-// dist/index.{js,mjs} import it relative to dist/. The Emscripten runtime then
-// locates blind_watermark.wasm next to that glue file — so both must live in dist/.
+// dist/index.{js,mjs} import it relative to dist/. With SINGLE_FILE=1 the wasm is
+// base64-inlined into the glue .js, so there is normally no separate .wasm to ship
+// (it is copied only if a non-inlined build produced one).
 import { copyFileSync, existsSync, mkdirSync } from 'fs';
 
-const files = ['blind_watermark.js', 'blind_watermark.wasm'];
-
 mkdirSync('dist', { recursive: true });
-for (const f of files) {
-  const src = `lib/${f}`;
-  if (!existsSync(src)) {
-    console.error(`Missing ${src} — run "npm run build:wasm" first.`);
-    process.exit(1);
-  }
-  copyFileSync(src, `dist/${f}`);
-  console.log(`copied ${src} -> dist/${f}`);
+
+// Required: the glue.
+const glue = 'lib/blind_watermark.js';
+if (!existsSync(glue)) {
+  console.error(`Missing ${glue} — run "npm run build:wasm" first.`);
+  process.exit(1);
+}
+copyFileSync(glue, 'dist/blind_watermark.js');
+console.log('copied lib/blind_watermark.js -> dist/blind_watermark.js');
+
+// Optional: a separate .wasm only exists for non-single-file builds.
+if (existsSync('lib/blind_watermark.wasm')) {
+  copyFileSync('lib/blind_watermark.wasm', 'dist/blind_watermark.wasm');
+  console.log('copied lib/blind_watermark.wasm -> dist/blind_watermark.wasm');
 }

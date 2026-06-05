@@ -73,7 +73,7 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8]"
         "-sNO_EXIT_RUNTIME=1"
         "-sFILESYSTEM=0"
-        "-sSINGLE_FILE=0"
+        "-sSINGLE_FILE=1"
         "-O3"
     )
     target_link_options(blind_watermark PRIVATE ${EMSCRIPTEN_LINK_FLAGS})

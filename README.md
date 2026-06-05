@@ -17,6 +17,11 @@ DWT-DCT-SVD based blind watermarking for images using WebAssembly. Works in brow
 npm install blind-watermark-wasm
 ```
 
+The WebAssembly is **inlined** into the JS (single-file build), so it bundles with
+**Vite, webpack, Next.js, esbuild, Rollup, etc. with zero configuration** — no
+wasm loader, no asset/`publicDir` setup, no separate `.wasm` to serve. Just import
+and bundle. (Trade-off: a larger JS bundle, since the wasm rides along base64-encoded.)
+
 ## Usage
 
 ### Recommended: self-describing watermark (no length to track)
