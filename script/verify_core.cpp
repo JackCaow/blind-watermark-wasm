@@ -295,6 +295,31 @@ int main() {
         failures += !ok;
     }
 
+    // ---- Test 11: deterministic PRNG is pinned (toolchain-independent) ----
+    {
+        auto p = BlindWatermarkCore::pinnedPermutation(1, 16);
+        auto q = BlindWatermarkCore::pinnedPermutation(42, 10);
+        printf("[11] pinnedPermutation(1,16) =");  for (auto x : p) printf(" %zu", x); printf("\n");
+        printf("     pinnedPermutation(42,10) ="); for (auto x : q) printf(" %zu", x); printf("\n");
+        // GOLDEN — these lock the format. If they ever change, watermarks break.
+        std::vector<size_t> g1 = {2, 11, 10, 6, 7, 13, 14, 0, 12, 5, 15, 9, 3, 8, 4, 1};
+        std::vector<size_t> g2 = {0, 9, 5, 8, 6, 4, 7, 2, 1, 3};
+        bool ok = (p == g1) && (q == g2);
+        printf("     determinism golden: %s\n", ok ? "PASS" : "FAIL (pin the values above)");
+        failures += !ok;
+    }
+
+    // ---- Test 12: oversize image is rejected with a catchable error ----
+    {
+        Image big; big.width = 5000; big.height = 5000; big.channels = 3; big.data.assign(3, 0);
+        bool threw = false; std::string msg;
+        try { BlindWatermarkCore core; core.setImage(big); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        bool ok = threw && msg.find("too large") != std::string::npos;
+        printf("[12] oversize image rejected: %s  (\"%s\")\n", ok ? "PASS" : "FAIL", msg.c_str());
+        failures += !ok;
+    }
+
     printf("\n%s\n", failures == 0 ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
     return failures == 0 ? 0 : 1;
 }

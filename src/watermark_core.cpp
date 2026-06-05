@@ -9,10 +9,42 @@
 
 namespace bwm {
 
+// Deterministic, toolchain-independent PRNG + shuffle.
+//
+// We deliberately do NOT use std::shuffle / std::uniform_int_distribution: the
+// standard does not fix their algorithms, so a future libc++/emscripten change
+// could silently alter block placement and make previously embedded watermarks
+// unreadable. SplitMix64 + Fisher-Yates below is pure integer arithmetic and
+// produces identical output on every platform and toolchain, forever. (Pinned by
+// the golden test in script/verify_core.cpp.)
+struct SplitMix64 {
+    uint64_t state;
+    explicit SplitMix64(uint64_t seed) : state(seed) {}
+    uint64_t next() {
+        state += 0x9E3779B97F4A7C15ull;
+        uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        return z ^ (z >> 31);
+    }
+};
+
+// In-place Fisher-Yates with a fixed seed. Modulo bias is irrelevant here (this
+// scrambles bit/block positions, not crypto), and keeping it makes the result
+// trivially reproducible.
+template <typename T>
+static void portableShuffle(std::vector<T>& v, int password) {
+    SplitMix64 rng(static_cast<uint64_t>(static_cast<uint32_t>(password)));
+    for (size_t i = v.size(); i > 1; --i) {
+        size_t j = static_cast<size_t>(rng.next() % i);  // j in [0, i)
+        std::swap(v[i - 1], v[j]);
+    }
+}
+
 // Apply (or undo) the password-seeded watermark permutation.
 // Templated so it can carry soft (double) confidence values on the way out, not
 // just hard bits on the way in. The permutation must be generated identically to
-// generateBlockIndices (same seed + std::shuffle) so embed and extract agree.
+// generateBlockIndices (same seed + portableShuffle) so embed and extract agree.
 template <typename T>
 static std::vector<T> permuteBits(const std::vector<T>& vals, int password, bool inverse) {
     size_t n = vals.size();
@@ -20,8 +52,7 @@ static std::vector<T> permuteBits(const std::vector<T>& vals, int password, bool
 
     std::vector<size_t> indices(n);
     std::iota(indices.begin(), indices.end(), 0);
-    std::mt19937 gen(static_cast<unsigned int>(password));
-    std::shuffle(indices.begin(), indices.end(), gen);
+    portableShuffle(indices, password);
 
     std::vector<T> result(n);
     if (inverse) {
@@ -39,8 +70,22 @@ static std::vector<T> permuteBits(const std::vector<T>& vals, int password, bool
 // payload intact". The header is its own redundant+scrambled chunk in the leading
 // blocks, so it can be decoded before the payload length is known.
 static const uint16_t BWM_MAGIC = 0xBA5E;
-static const uint8_t  BWM_FMT_VERSION = 1;
+static const uint8_t  BWM_FMT_VERSION = 2;  // 2 = deterministic (SplitMix64) block order
 static const size_t   BWM_HEADER_BYTES = 8;
+
+// Guards the Eigen double-precision Y/U/V buffers (24 bytes/px) plus DWT/DCT
+// temporaries against the 1 GB wasm heap. Beyond this we raise a catchable error
+// instead of letting the wasm instance abort on a bad allocation.
+static const int64_t BWM_MAX_PIXELS = 10000000;  // ~10 megapixels
+
+static void checkPixelLimit(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        throw std::runtime_error("Invalid image dimensions");
+    }
+    if (static_cast<int64_t>(width) * static_cast<int64_t>(height) > BWM_MAX_PIXELS) {
+        throw std::runtime_error("Image too large: maximum is ~10 megapixels");
+    }
+}
 
 // CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) over the payload bytes.
 static uint16_t crc16_ccitt(const std::vector<uint8_t>& data) {
@@ -90,6 +135,7 @@ void BlindWatermarkCore::setImage(const Image& img) {
     if (img.empty() || (img.channels != 3 && img.channels != 4)) {
         throw std::runtime_error("Invalid image: must be RGB (3) or RGBA (4) channels");
     }
+    checkPixelLimit(img.width, img.height);
 
     imgWidth_ = img.width;
     imgHeight_ = img.height;
@@ -216,8 +262,7 @@ std::vector<std::pair<int, int>> BlindWatermarkCore::buildBlockOrder(int passwor
     // Deterministic password-seeded shuffle. A prefix of this order is stable
     // regardless of how many blocks are taken, so a fixed-size header can be read
     // before the payload length is known.
-    std::mt19937 gen(static_cast<unsigned int>(password));
-    std::shuffle(all.begin(), all.end(), gen);
+    portableShuffle(all, password);
     return all;
 }
 
@@ -227,6 +272,13 @@ void BlindWatermarkCore::generateBlockIndices(int numBlocks, int password, int l
         throw std::runtime_error("Image too small for watermark");
     }
     blockIndices_.assign(order.begin(), order.begin() + numBlocks);
+}
+
+std::vector<size_t> BlindWatermarkCore::pinnedPermutation(int password, size_t count) {
+    std::vector<size_t> idx(count);
+    std::iota(idx.begin(), idx.end(), 0);
+    portableShuffle(idx, password);
+    return idx;
 }
 
 void BlindWatermarkCore::embedQimBlock(Eigen::MatrixXd& LL, int blockRow, int blockCol, uint8_t bit) const {
@@ -457,6 +509,7 @@ ExtractResult BlindWatermarkCore::extractSelfDescribing(const Image& img) {
     if (img.empty() || (img.channels != 3 && img.channels != 4)) {
         throw std::runtime_error("Invalid image: must be RGB (3) or RGBA (4) channels");
     }
+    checkPixelLimit(img.width, img.height);
 
     ExtractResult res;
 
@@ -516,6 +569,7 @@ std::vector<uint8_t> BlindWatermarkCore::extractBits(const Image& img, size_t wm
     if (img.empty() || (img.channels != 3 && img.channels != 4)) {
         throw std::runtime_error("Invalid image: must be RGB (3) or RGBA (4) channels");
     }
+    checkPixelLimit(img.width, img.height);
 
     // Convert RGB(A) to YUV (alpha ignored for extraction)
     Eigen::MatrixXd Y, U, V;
