@@ -4,7 +4,11 @@
 import fs from 'fs';
 import { BlindWatermark } from 'blind-watermark-wasm';
 
-const bwm = new BlindWatermark();
+// Higher redundancy than the default: this gate verifies the package plumbing
+// works, not the robustness envelope (that's script/run_bench.sh). test.png is a
+// real photo with saturated regions where the default redundancy can leave a
+// single marginal bit, which would make this a flaky gate.
+const bwm = new BlindWatermark({ redundancy: 6 });
 const img = new Uint8Array(fs.readFileSync('test.png'));
 
 // Low-level explicit-length API
