@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>blind-watermark-wasm — invisible image watermarking in your browser</title>
+<meta name="description" content="Embed and recover invisible watermarks in images, entirely client-side via WebAssembly. DWT-DCT-SVD blind watermarking." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<!-- Emscripten glue (defines global BlindWatermarkModule); it loads its .wasm from the same CDN dir -->
+<script src="https://cdn.jsdelivr.net/npm/blind-watermark-wasm@1.1.0/dist/blind_watermark.js"></script>
+<style>
+  :root {
+    --bg: #08090b;
+    --bg-2: #0d0f12;
+    --panel: rgba(20, 23, 27, 0.72);
+    --line: rgba(198, 244, 50, 0.14);
+    --line-soft: rgba(232, 236, 230, 0.08);
+    --ink: #e9ede4;
+    --muted: #7e8a78;
+    --muted-2: #586057;
+    --signal: #c6f432;   /* embed / primary */
+    --decode: #4be3d2;   /* extract / decode */
+    --warn: #ffb454;
+    --bad: #ff6b6b;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --display: "Bricolage Grotesque", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* ---- atmosphere layers ---- */
+  .bg-layer { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+  .bg-grid {
+    background-image:
+      radial-gradient(1100px 620px at 72% -10%, rgba(198, 244, 50, 0.10), transparent 60%),
+      radial-gradient(900px 560px at 8% 108%, rgba(75, 227, 210, 0.07), transparent 60%),
+      repeating-linear-gradient(90deg, var(--line-soft) 0 1px, transparent 1px 64px);
+    background-color: var(--bg);
+  }
+  .bg-scan {
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px);
+    opacity: 0.35; mix-blend-mode: multiply;
+  }
+  .bg-noise { opacity: 0.045; }
+  .bg-noise svg { width: 100%; height: 100%; }
+
+  /* ---- layout ---- */
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px 90px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 24px; padding: 30px 0 18px; flex-wrap: wrap;
+    animation: fadeUp 0.7s 0.02s both ease-out;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .mark {
+    width: 42px; height: 42px; flex: none; position: relative;
+    border: 1px solid var(--line); border-radius: 9px;
+    background: linear-gradient(160deg, rgba(198,244,50,0.14), rgba(198,244,50,0.02));
+    display: grid; place-items: center; overflow: hidden;
+  }
+  .mark svg { width: 26px; height: 26px; }
+  .brand b {
+    font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: 0.02em;
+  }
+  .brand b span { color: var(--signal); }
+  .brand small { display: block; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; margin-top: 1px; }
+  .links { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pill {
+    font-size: 11.5px; letter-spacing: 0.04em; text-decoration: none; color: var(--ink);
+    border: 1px solid var(--line); padding: 7px 12px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 7px; transition: 0.18s ease;
+    background: rgba(255,255,255,0.01);
+  }
+  .pill:hover { border-color: var(--signal); color: var(--signal); transform: translateY(-1px); }
+  .pill.ver { color: var(--muted); }
+  .pill.ver b { color: var(--signal); font-weight: 700; }
+
+  /* ---- hero ---- */
+  .hero { padding: 26px 0 34px; animation: fadeUp 0.7s 0.1s both ease-out; }
+  .hero h1 {
+    font-family: var(--display); font-weight: 800;
+    font-size: clamp(40px, 7.2vw, 92px); line-height: 0.94; letter-spacing: -0.025em;
+    max-width: 14ch;
+  }
+  .hero h1 em { font-style: normal; color: var(--signal); position: relative; }
+  .hero h1 em::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0.08em; height: 0.07em;
+    background: var(--signal); opacity: 0.35;
+  }
+  .hero p {
+    margin-top: 20px; max-width: 60ch; color: var(--muted);
+    font-size: 15px; letter-spacing: 0.01em;
+  }
+  .hero p b { color: var(--ink); font-weight: 500; }
+  .wave { margin-top: 26px; height: 38px; width: min(520px, 92%); opacity: 0.8; }
+  .wave path { stroke: var(--signal); stroke-width: 1.6; fill: none; }
+  .wave path.b { stroke: var(--decode); opacity: 0.55; }
+
+  /* ---- console ---- */
+  .console {
+    display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 22px;
+    margin-top: 14px; animation: fadeUp 0.7s 0.18s both ease-out;
+  }
+  @media (max-width: 880px) { .console { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 20px; position: relative;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 24px 60px -40px rgba(0,0,0,0.9);
+  }
+  .panel-h {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted);
+  }
+  .panel-h .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--signal); box-shadow: 0 0 10px var(--signal); }
+  .panel-h .n { margin-left: auto; color: var(--muted-2); font-size: 11px; }
+
+  /* image stage */
+  .stage {
+    position: relative; border: 1px dashed var(--line); border-radius: 12px;
+    aspect-ratio: 16 / 11; display: grid; place-items: center; overflow: hidden;
+    background:
+      linear-gradient(0deg, rgba(255,255,255,0.012), rgba(255,255,255,0.012)),
+      repeating-linear-gradient(90deg, rgba(232,236,230,0.04) 0 1px, transparent 1px 24px);
+    transition: border-color 0.2s ease, background 0.2s ease;
+    cursor: pointer;
+  }
+  .stage.drag { border-color: var(--signal); background: rgba(198,244,50,0.05); }
+  .stage img { width: 100%; height: 100%; object-fit: contain; display: none; }
+  .stage.has-img { cursor: grab; }
+  .stage.has-img img { display: block; }
+  .stage-empty { text-align: center; padding: 22px; color: var(--muted); }
+  .stage-empty svg { width: 34px; height: 34px; opacity: 0.6; margin-bottom: 12px; }
+  .stage-empty b { display: block; color: var(--ink); font-weight: 500; font-size: 13.5px; letter-spacing: 0.02em; }
+  .stage-empty span { font-size: 11.5px; }
+  .stage-empty u { color: var(--signal); text-decoration: none; border-bottom: 1px solid var(--line); }
+
+  /* scan sweep during processing */
+  .stage .sweep {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background: linear-gradient(180deg, transparent, rgba(198,244,50,0.0) 42%, rgba(198,244,50,0.55), rgba(198,244,50,0.0) 58%, transparent);
+    background-size: 100% 220%;
+  }
+  .stage.busy .sweep { opacity: 1; animation: sweep 1.05s linear infinite; }
+  .stage.decode .sweep { background: linear-gradient(180deg, transparent, transparent 42%, rgba(75,227,210,0.6), transparent 58%, transparent); }
+
+  .stage-tag {
+    position: absolute; top: 10px; left: 10px; font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; padding: 4px 9px; border-radius: 6px;
+    background: rgba(8,9,11,0.7); border: 1px solid var(--line); color: var(--muted);
+    display: none;
+  }
+  .stage.has-img .stage-tag { display: block; }
+  .stage.watermarked .stage-tag { color: var(--signal); border-color: var(--signal); }
+  .compare-hint {
+    position: absolute; bottom: 10px; right: 10px; font-size: 10px; color: var(--muted-2);
+    letter-spacing: 0.06em; display: none;
+  }
+  .stage.watermarked .compare-hint { display: block; }
+
+  /* controls */
+  .field { margin-top: 16px; }
+  .field:first-of-type { margin-top: 4px; }
+  label.lab { display: block; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  textarea, input[type="text"], select {
+    width: 100%; font-family: var(--mono); font-size: 14px; color: var(--ink);
+    background: rgba(0,0,0,0.28); border: 1px solid var(--line-soft); border-radius: 10px;
+    padding: 12px 13px; outline: none; transition: border-color 0.16s ease, box-shadow 0.16s ease;
+    resize: vertical;
+  }
+  textarea { min-height: 78px; }
+  textarea:focus, input:focus, select:focus { border-color: var(--signal); box-shadow: 0 0 0 3px rgba(198,244,50,0.08); }
+  .row { display: grid; grid-template-columns: 1fr 130px; gap: 12px; }
+  select { -webkit-appearance: none; appearance: none; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: right 14px center, right 9px center; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+
+  .actions { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  button {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; cursor: pointer; border-radius: 10px; padding: 13px 18px;
+    border: 1px solid transparent; transition: 0.16s ease; display: inline-flex; align-items: center; gap: 9px;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-embed { background: var(--signal); color: #0a0c04; flex: 1; justify-content: center; min-width: 150px; }
+  .btn-embed:not(:disabled):hover { box-shadow: 0 0 0 3px rgba(198,244,50,0.18), 0 10px 30px -10px rgba(198,244,50,0.5); transform: translateY(-1px); }
+  .btn-ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  .btn-ghost:not(:disabled):hover { border-color: var(--ink); }
+  .btn-decode { color: var(--decode); border-color: rgba(75,227,210,0.4); background: rgba(75,227,210,0.04); flex: 1; justify-content: center; min-width: 150px; }
+  .btn-decode:not(:disabled):hover { border-color: var(--decode); box-shadow: 0 0 0 3px rgba(75,227,210,0.12); transform: translateY(-1px); }
+
+  .hint { font-size: 11px; color: var(--muted-2); margin-top: 12px; letter-spacing: 0.02em; }
+  .hint code { color: var(--muted); }
+
+  /* readout terminal */
+  .readout {
+    margin-top: 18px; border: 1px solid var(--line-soft); border-radius: 12px;
+    background: rgba(0,0,0,0.34); padding: 16px; font-size: 13px; min-height: 132px;
+    position: relative; overflow: hidden;
+  }
+  .readout::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px);
+  }
+  .ro-line { color: var(--muted); }
+  .ro-line .k { color: var(--muted-2); }
+  .ro-status { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; }
+  .ro-status.ok { color: var(--decode); }
+  .ro-status.warn { color: var(--warn); }
+  .ro-status.bad { color: var(--bad); }
+  .ro-status.idle { color: var(--muted-2); }
+  .ro-payload {
+    margin-top: 12px; padding: 12px; border-radius: 8px; border: 1px dashed var(--line);
+    color: var(--ink); white-space: pre-wrap; word-break: break-word; font-size: 14px;
+    background: rgba(198,244,50,0.03); display: none;
+  }
+  .ro-payload.show { display: block; }
+  .ro-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: 11px; color: var(--muted-2); }
+  .ro-meta b { color: var(--muted); font-weight: 500; }
+  .cursor { display: inline-block; width: 8px; height: 14px; background: var(--decode); vertical-align: -2px; margin-left: 4px; animation: blink 1.05s steps(1) infinite; }
+
+  .err { color: var(--bad); font-size: 12px; margin-top: 12px; min-height: 16px; letter-spacing: 0.01em; }
+
+  /* how-it-works strip */
+  .how { margin-top: 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+    animation: fadeUp 0.7s 0.26s both ease-out; }
+  @media (max-width: 760px) { .how { grid-template-columns: 1fr; } }
+  .how .card { border: 1px solid var(--line-soft); border-radius: 14px; padding: 18px; background: rgba(255,255,255,0.012); }
+  .how .num { font-family: var(--display); font-weight: 800; font-size: 26px; color: var(--signal); }
+  .how h3 { font-size: 13px; letter-spacing: 0.02em; margin: 8px 0 6px; }
+  .how p { font-size: 12px; color: var(--muted); }
+
+  /* code snippet */
+  .snippet { margin-top: 22px; animation: fadeUp 0.7s 0.32s both ease-out; }
+  .snippet .panel { padding: 0; overflow: hidden; }
+  .snippet .bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); font-size: 11px; color: var(--muted); letter-spacing: 0.06em; }
+  .snippet .bar i { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.12); display: inline-block; }
+  .snippet pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.7; }
+  .snippet code { font-family: var(--mono); color: var(--ink); }
+  .tk { color: var(--muted-2); }      /* punctuation/comment */
+  .tkk { color: var(--decode); }      /* keyword */
+  .tkf { color: var(--signal); }      /* fn / ident */
+  .tks { color: #d8c98a; }            /* string */
+
+  footer { margin-top: 46px; padding-top: 20px; border-top: 1px solid var(--line-soft);
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: var(--muted-2); font-size: 11.5px; }
+  footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line-soft); }
+  footer a:hover { color: var(--signal); }
+
+  /* boot overlay */
+  .boot { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center;
+    transition: opacity 0.5s ease, visibility 0.5s; }
+  .boot.done { opacity: 0; visibility: hidden; }
+  .boot .b-in { text-align: center; }
+  .boot .b-in .ring { width: 40px; height: 40px; margin: 0 auto 16px; border: 2px solid var(--line-soft); border-top-color: var(--signal); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  .boot .b-in p { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+  .boot.error .ring { animation: none; border-top-color: var(--bad); }
+  .boot.error p { color: var(--bad); }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes sweep { 0% { background-position: 0 -110%; } 100% { background-position: 0 110%; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: 0.001s !important; } .stage.busy .sweep { animation: none; opacity: 0.3; } }
+</style>
+</head>
+<body>
+  <div class="bg-layer bg-grid"></div>
+  <div class="bg-layer bg-scan"></div>
+  <div class="bg-layer bg-noise" aria-hidden="true">
+    <svg xmlns="http://www.w3.org/2000/svg"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>
+  </div>
+
+  <div class="boot" id="boot">
+    <div class="b-in">
+      <div class="ring"></div>
+      <p id="bootMsg">loading webassembly…</p>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#c6f432" stroke-width="1.5"><path d="M3 12h3l2-6 4 12 3-9 2 3h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div>
+          <b>blind&#8209;watermark<span>::wasm</span></b>
+          <small>frequency-domain steganography</small>
+        </div>
+      </div>
+      <div class="links">
+        <span class="pill ver">v<b id="verTag">1.1.0</b></span>
+        <a class="pill" href="https://www.npmjs.com/package/blind-watermark-wasm" target="_blank" rel="noopener">npm ↗</a>
+        <a class="pill" href="https://github.com/JackCaow/blind-watermark-wasm" target="_blank" rel="noopener">github ↗</a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <h1>Hide a message <em>inside</em> a picture.</h1>
+      <p><b>Invisible, robust watermarks</b> woven into the DWT-DCT-SVD frequency domain of an image — survives re-saving, recoverable with nothing but the image and a secret. Everything below runs <b>entirely in your browser</b> through WebAssembly. No upload, no server.</p>
+      <svg class="wave" viewBox="0 0 520 40" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 20 Q 32 2, 65 20 T 130 20 T 195 20 T 260 20 T 325 20 T 390 20 T 455 20 T 520 20" />
+        <path class="b" d="M0 22 Q 26 36, 52 22 T 104 22 T 156 22 T 208 22 T 260 22 T 312 22 T 364 22 T 416 22 T 468 22 T 520 22" />
+      </svg>
+    </section>
+
+    <section class="console">
+      <!-- IMAGE -->
+      <div class="panel">
+        <div class="panel-h"><span class="dot"></span> carrier image <span class="n">01</span></div>
+        <div class="stage" id="stage" tabindex="0" role="button" aria-label="Choose an image">
+          <div class="sweep"></div>
+          <span class="stage-tag" id="stageTag">original</span>
+          <span class="compare-hint">hold to compare with original</span>
+          <img id="preview" alt="carrier preview" />
+          <div class="stage-empty" id="stageEmpty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="m21 15-5-5L5 21"/></svg>
+            <b>Drop an image here</b>
+            <span>or <u>browse</u> · <u id="sampleBtn">use a sample</u></span>
+          </div>
+        </div>
+        <input type="file" id="file" accept="image/png,image/jpeg,image/webp" hidden />
+        <div class="how" style="margin-top:18px; grid-template-columns:1fr;">
+          <div class="card" style="padding:14px 16px;">
+            <p style="color:var(--muted)">Tip — embed a message, hit <b style="color:var(--signal)">download</b>, then drag the saved file back in and <b style="color:var(--decode)">decode</b> it to prove the watermark survives the round-trip.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONTROLS -->
+      <div class="panel">
+        <div class="panel-h"><span class="dot"></span> payload &amp; secret <span class="n">02</span></div>
+
+        <div class="field">
+          <label class="lab" for="msg">message</label>
+          <textarea id="msg" placeholder="Type a secret message to hide…">© 2026 — proof of origin</textarea>
+        </div>
+
+        <div class="field">
+          <div class="row">
+            <div>
+              <label class="lab" for="secret">secret (optional)</label>
+              <input type="text" id="secret" placeholder="same secret to decode" />
+            </div>
+            <div>
+              <label class="lab" for="fmt">format</label>
+              <select id="fmt">
+                <option value="png">PNG</option>
+                <option value="webp">WebP</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn-embed" id="embed" disabled>◆ Embed watermark</button>
+          <button class="btn-ghost" id="download" disabled>↓ Download</button>
+        </div>
+        <div class="actions" style="margin-top:12px;">
+          <button class="btn-decode" id="decode" disabled>⟲ Decode watermark</button>
+        </div>
+
+        <div class="err" id="err"></div>
+
+        <div class="panel-h" style="margin-top:22px;"><span class="dot" style="background:var(--decode); box-shadow:0 0 10px var(--decode)"></span> decode readout <span class="n">03</span></div>
+        <div class="readout" id="readout" aria-live="polite">
+          <div class="ro-line"><span class="k">&gt;</span> <span class="ro-status idle" id="roStatus">awaiting signal<span class="cursor"></span></span></div>
+          <div class="ro-payload" id="roPayload"></div>
+          <div class="ro-meta" id="roMeta" style="display:none;"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="how">
+      <div class="card"><div class="num">01</div><h3>DWT → DCT → SVD</h3><p>The luminance channel is wavelet-transformed; each block's largest singular value is quantized to carry one bit — imperceptible to the eye.</p></div>
+      <div class="card"><div class="num">02</div><h3>Self-describing</h3><p>A header (magic + length + CRC-16) is embedded with the payload, so decoding needs only the image — no bit length to remember.</p></div>
+      <div class="card"><div class="num">03</div><h3>Blind &amp; robust</h3><p>Recovery needs no original image. Redundant, scrambled placement keeps the mark alive through PNG re-saves and moderate JPEG.</p></div>
+    </section>
+
+    <section class="snippet">
+      <div class="panel">
+        <div class="bar"><i></i><i></i><i></i> &nbsp; the same call, in your code</div>
+<pre><code><span class="tk">// npm i blind-watermark-wasm</span>
+<span class="tkk">import</span> { BlindWatermark } <span class="tkk">from</span> <span class="tks">'blind-watermark-wasm'</span>;
+
+<span class="tkk">const</span> bwm = <span class="tkk">new</span> <span class="tkf">BlindWatermark</span>();
+<span class="tkk">const</span> marked  = <span class="tkk">await</span> bwm.<span class="tkf">embed</span>(imageBytes, <span class="tks">'© 2026'</span>);   <span class="tk">// text or Uint8Array</span>
+<span class="tkk">const</span> result  = <span class="tkk">await</span> bwm.<span class="tkf">extract</span>(marked);             <span class="tk">// no length needed</span>
+<span class="tkk">if</span> (result?.valid) <span class="tkf">console</span>.<span class="tkf">log</span>(result.text);       <span class="tk">// → '© 2026'</span></code></pre>
+      </div>
+    </section>
+
+    <footer>
+      <span>Runs client-side via WebAssembly · loaded from <a href="https://www.jsdelivr.com/" target="_blank" rel="noopener">jsDelivr</a></span>
+      <span>MIT · <a href="https://github.com/JackCaow/blind-watermark-wasm" target="_blank" rel="noopener">JackCaow/blind-watermark-wasm</a></span>
+    </footer>
+  </div>
+
+<script type="module">
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), preview = $('preview'), stageEmpty = $('stageEmpty'), stageTag = $('stageTag');
+  const fileInput = $('file'), msg = $('msg'), secret = $('secret'), fmt = $('fmt');
+  const embedBtn = $('embed'), downloadBtn = $('download'), decodeBtn = $('decode');
+  const err = $('err'), roStatus = $('roStatus'), roPayload = $('roPayload'), roMeta = $('roMeta');
+
+  let Module = null;
+  let current = null;        // { bytes: Uint8Array, url, mime }
+  let originalUrl = null;    // for press-and-hold compare
+  let watermarked = false;
+  let lastBlob = null, lastName = 'watermarked.png';
+
+  // password string -> stable 31-bit int (FNV-1a); empty -> 1 (library default)
+  function secretToInt(s) {
+    if (!s) return 1;
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 1) || 1;
+  }
+  function setErr(m) { err.textContent = m || ''; }
+
+  async function boot() {
+    try {
+      if (typeof BlindWatermarkModule !== 'function') throw new Error('module script failed to load');
+      Module = await BlindWatermarkModule();
+      $('boot').classList.add('done');
+    } catch (e) {
+      const b = $('boot'); b.classList.add('error');
+      $('bootMsg').textContent = 'failed to load wasm — check your connection';
+      console.error(e);
+    }
+  }
+  boot();
+
+  // ---- image loading ----
+  function showImage(bytes, mime) {
+    if (current && current.url) URL.revokeObjectURL(current.url);
+    const blob = new Blob([bytes], { type: mime || 'image/png' });
+    const url = URL.createObjectURL(blob);
+    current = { bytes, url, mime: mime || 'image/png' };
+    preview.src = url;
+    stage.classList.add('has-img');
+    stageEmpty.style.display = 'none';
+    embedBtn.disabled = !Module;
+    decodeBtn.disabled = !Module;
+  }
+  function markFresh(tag) {
+    watermarked = false; stage.classList.remove('watermarked');
+    stageTag.textContent = tag || 'original';
+    downloadBtn.disabled = true; lastBlob = null;
+    if (originalUrl) { URL.revokeObjectURL(originalUrl); originalUrl = null; }
+    resetReadout();
+  }
+
+  async function loadFile(file) {
+    if (!file || !file.type.startsWith('image/')) { setErr('Please choose a PNG, JPEG or WebP image.'); return; }
+    setErr('');
+    const buf = new Uint8Array(await file.arrayBuffer());
+    lastName = (file.name || 'image').replace(/\.[^.]+$/, '') + '.watermarked.png';
+    showImage(buf, file.type);
+    markFresh('original');
+  }
+
+  fileInput.addEventListener('change', (e) => loadFile(e.target.files[0]));
+  stage.addEventListener('click', (e) => { if (e.target.id !== 'sampleBtn') fileInput.click(); });
+  stage.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+  ['dragenter', 'dragover'].forEach(ev => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.remove('drag'); }));
+  stage.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+  // press & hold to compare watermarked vs original
+  const showOrig = () => { if (watermarked && originalUrl) preview.src = originalUrl; };
+  const showMarked = () => { if (watermarked && current) preview.src = current.url; };
+  stage.addEventListener('mousedown', showOrig); stage.addEventListener('mouseup', showMarked); stage.addEventListener('mouseleave', showMarked);
+  stage.addEventListener('touchstart', (e) => { showOrig(); }, { passive: true });
+  stage.addEventListener('touchend', showMarked);
+
+  // ---- sample image (generated on a canvas) ----
+  $('sampleBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const W = 720, H = 480, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    const g = x.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, '#16324f'); g.addColorStop(0.5, '#3b6e6a'); g.addColorStop(1, '#caa24a');
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    for (let i = 0; i < 9; i++) {
+      const rg = x.createRadialGradient(Math.random()*W, Math.random()*H, 4, Math.random()*W, Math.random()*H, 120 + Math.random()*160);
+      rg.addColorStop(0, `hsla(${Math.random()*360|0},70%,65%,0.5)`); rg.addColorStop(1, 'transparent');
+      x.fillStyle = rg; x.fillRect(0, 0, W, H);
+    }
+    // a little grain so DCT blocks have texture
+    const id = x.getImageData(0, 0, W, H), d = id.data;
+    for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 18; d[i] += n; d[i+1] += n; d[i+2] += n; }
+    x.putImageData(id, 0, 0);
+    c.toBlob(async (blob) => { const buf = new Uint8Array(await blob.arrayBuffer()); lastName = 'sample.watermarked.png'; showImage(buf, 'image/png'); markFresh('sample'); }, 'image/png');
+  });
+
+  // ---- readout ----
+  function resetReadout() {
+    roStatus.className = 'ro-status idle'; roStatus.innerHTML = 'awaiting signal<span class="cursor"></span>';
+    roPayload.className = 'ro-payload'; roPayload.textContent = ''; roMeta.style.display = 'none'; roMeta.innerHTML = '';
+  }
+
+  // ---- embed ----
+  embedBtn.addEventListener('click', async () => {
+    if (!Module || !current) return;
+    const text = msg.value;
+    if (!text) { setErr('Type a message to embed.'); return; }
+    setErr(''); embedBtn.disabled = true; stage.classList.add('busy');
+    await new Promise(r => setTimeout(r, 420)); // let the scan animation read
+    try {
+      const pw = secretToInt(secret.value);
+      Module.setConfig(pw, pw, 36, 0, 4, 1, 3);
+      const payload = new TextEncoder().encode(text);
+      const format = fmt.value;
+      const res = Module.embedSelfDescribing(current.bytes, payload, true, format);
+      if (res.error) throw new Error(res.error);
+      const outBytes = new Uint8Array(res.imageData);
+      const mime = format === 'webp' ? 'image/webp' : 'image/png';
+
+      originalUrl = current.url;        // keep original for compare
+      current = null;                    // showImage revokes; don't kill originalUrl
+      const blob = new Blob([outBytes], { type: mime });
+      const url = URL.createObjectURL(blob);
+      current = { bytes: outBytes, url, mime };
+      preview.src = url;
+      lastBlob = blob; lastName = lastName.replace(/\.(png|webp)$/, '') + (format === 'webp' ? '.webp' : '.png');
+
+      watermarked = true; stage.classList.add('watermarked'); stageTag.textContent = 'watermarked';
+      downloadBtn.disabled = false; decodeBtn.disabled = false;
+      resetReadout();
+    } catch (e) {
+      setErr(humanError(e.message));
+    } finally {
+      stage.classList.remove('busy'); embedBtn.disabled = false;
+    }
+  });
+
+  function humanError(m) {
+    if (/too small/i.test(m)) return 'Image too small for this message — try a larger image or a shorter message.';
+    if (/decode/i.test(m)) return 'Could not decode that image file.';
+    return m || 'Something went wrong.';
+  }
+
+  // ---- download ----
+  downloadBtn.addEventListener('click', () => {
+    if (!lastBlob) return;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(lastBlob); a.download = lastName;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  });
+
+  // ---- decode ----
+  decodeBtn.addEventListener('click', async () => {
+    if (!Module || !current) return;
+    setErr(''); decodeBtn.disabled = true; stage.classList.add('busy', 'decode');
+    roStatus.className = 'ro-status idle'; roStatus.innerHTML = 'scanning…<span class="cursor"></span>';
+    await new Promise(r => setTimeout(r, 520));
+    try {
+      const pw = secretToInt(secret.value);
+      Module.setConfig(pw, pw, 36, 0, 4, 1, 3);
+      const r = Module.extractSelfDescribing(current.bytes);
+      if (!r.found) {
+        roStatus.className = 'ro-status bad'; roStatus.textContent = '✕ no watermark for this secret';
+        roPayload.className = 'ro-payload'; roMeta.style.display = 'none';
+      } else {
+        const bytes = new Uint8Array(r.payload);
+        const txt = r.isText ? new TextDecoder().decode(bytes) : Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
+        if (r.valid) { roStatus.className = 'ro-status ok'; roStatus.textContent = '✓ signal decoded'; }
+        else { roStatus.className = 'ro-status warn'; roStatus.textContent = '⚠ detected — checksum failed'; }
+        roPayload.textContent = txt; roPayload.className = 'ro-payload show';
+        roMeta.style.display = 'flex';
+        roMeta.innerHTML = `<span><b>type</b> ${r.isText ? 'text' : 'binary'}</span><span><b>bytes</b> ${bytes.length}</span><span><b>version</b> ${r.version}</span><span><b>crc</b> ${r.valid ? 'ok' : 'fail'}</span>`;
+      }
+    } catch (e) {
+      roStatus.className = 'ro-status bad'; roStatus.textContent = '✕ ' + humanError(e.message);
+    } finally {
+      stage.classList.remove('busy', 'decode'); decodeBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
