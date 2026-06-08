@@ -23,6 +23,7 @@
     "build:copy": "node script/copy-wasm-to-dist.mjs",
     "build": "npm run build:wasm && npm run build:ts && npm run build:copy",
     "smoke": "bash script/smoke-pack.sh",
+    "prepack": "npm run build:ts && npm run build:copy",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -42,6 +43,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/JackCaow/blind-watermark-wasm.git"
+  },
+  "homepage": "https://JackCaow.github.io/blind-watermark-wasm/",
+  "bugs": {
+    "url": "https://github.com/JackCaow/blind-watermark-wasm/issues"
   },
   "devDependencies": {
     "tsup": "^8.0.0",

@@ -106,8 +106,10 @@ val embedStringWatermarkBytes(val imageDataVal, const std::string& watermarkText
     }
 }
 
-// Extract string watermark from image using Uint8Array input
-std::string extractStringWatermarkBytes(val imageDataVal, int wmBitLength) {
+// Extract string watermark from image using Uint8Array input.
+// Returns { text } on success or { error } on failure (e.g. an undecodable image),
+// so callers can tell a real failure apart from a legitimately empty result.
+val extractStringWatermarkBytes(val imageDataVal, int wmBitLength) {
     try {
         // Convert JavaScript Uint8Array to std::vector<uint8_t>
         std::vector<uint8_t> imageBytes = convertJSArrayToNumberVector<uint8_t>(imageDataVal);
@@ -115,16 +117,22 @@ std::string extractStringWatermarkBytes(val imageDataVal, int wmBitLength) {
         // Decode image
         Image img;
         if (!loadImageFromMemory(imageBytes.data(), imageBytes.size(), img)) {
-            return "";
+            val errorObj = val::object();
+            errorObj.set("error", val(std::string("Failed to decode image")));
+            return errorObj;
         }
 
         // Create watermark core and extract
         BlindWatermarkCore core(g_config);
         std::string text = core.extractText(img, wmBitLength);
 
-        return text;
+        val resultObj = val::object();
+        resultObj.set("text", val(text));
+        return resultObj;
     } catch (const std::exception& e) {
-        return "";
+        val errorObj = val::object();
+        errorObj.set("error", val(std::string(e.what())));
+        return errorObj;
     }
 }
 
@@ -142,10 +150,18 @@ val embedBinaryWatermarkBytes(val imageDataVal, const std::string& watermarkBits
             return errorObj;
         }
 
-        // Convert string bits to vector
+        // Convert string bits to vector, rejecting anything that isn't '0'/'1'.
+        // Silently coercing stray characters to 0 (the old behaviour) would embed a
+        // wrong payload that only surfaces as a hard-to-diagnose extraction mismatch.
         std::vector<uint8_t> bits;
         bits.reserve(watermarkBits.size());
         for (char c : watermarkBits) {
+            if (c != '0' && c != '1') {
+                val errorObj = val::object();
+                errorObj.set("error", val(std::string(
+                    "Invalid watermark bits: expected a string of '0' and '1' only")));
+                return errorObj;
+            }
             bits.push_back(c == '1' ? 1 : 0);
         }
 
@@ -181,8 +197,9 @@ val embedBinaryWatermarkBytes(val imageDataVal, const std::string& watermarkBits
     }
 }
 
-// Extract binary watermark using Uint8Array
-std::string extractBinaryWatermarkBytes(val imageDataVal, int wmBitLength) {
+// Extract binary watermark using Uint8Array.
+// Returns { bits } (a string of '0'/'1') on success or { error } on failure.
+val extractBinaryWatermarkBytes(val imageDataVal, int wmBitLength) {
     try {
         // Convert JavaScript Uint8Array to std::vector<uint8_t>
         std::vector<uint8_t> imageBytes = convertJSArrayToNumberVector<uint8_t>(imageDataVal);
@@ -190,7 +207,9 @@ std::string extractBinaryWatermarkBytes(val imageDataVal, int wmBitLength) {
         // Decode image
         Image img;
         if (!loadImageFromMemory(imageBytes.data(), imageBytes.size(), img)) {
-            return "";
+            val errorObj = val::object();
+            errorObj.set("error", val(std::string("Failed to decode image")));
+            return errorObj;
         }
 
         // Create watermark core and extract
@@ -204,9 +223,13 @@ std::string extractBinaryWatermarkBytes(val imageDataVal, int wmBitLength) {
             result.push_back(bit ? '1' : '0');
         }
 
-        return result;
+        val resultObj = val::object();
+        resultObj.set("bits", val(result));
+        return resultObj;
     } catch (const std::exception& e) {
-        return "";
+        val errorObj = val::object();
+        errorObj.set("error", val(std::string(e.what())));
+        return errorObj;
     }
 }
 
