@@ -23,7 +23,7 @@
     "build:copy": "node script/copy-wasm-to-dist.mjs",
     "build": "npm run build:wasm && npm run build:ts && npm run build:copy",
     "smoke": "bash script/smoke-pack.sh",
-    "prepack": "npm run build:ts && npm run build:copy",
+    "prepack": "npm run build:ts >&2 && npm run build:copy >&2",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
