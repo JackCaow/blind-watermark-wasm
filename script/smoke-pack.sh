@@ -8,7 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-TARBALL="$(npm pack --silent)"
+# `npm pack` prints the tarball name as the last stdout line; take only that so any
+# prepack build chatter on stdout can't end up in the filename (pipefail keeps a
+# pack failure fatal).
+TARBALL="$(npm pack --silent | tail -n1)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

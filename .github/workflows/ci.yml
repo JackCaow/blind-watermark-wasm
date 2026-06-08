@@ -41,3 +41,5 @@ jobs:
         run: npm run build
       - name: Round-trip test (embed + extract)
         run: node test.mjs
+      - name: Smoke-test the packed tarball (mirrors the publish gate)
+        run: bash script/smoke-pack.sh
