@@ -61,9 +61,16 @@ async function test() {
     console.log('\nExtracting watermark...');
 
     const startExtract = Date.now();
-    const extractedText = Module.extractStringWatermark(watermarkedData, wmBitLength);
+    const extractResult = Module.extractStringWatermark(watermarkedData, wmBitLength);
     const extractTime = Date.now() - startExtract;
 
+    if (extractResult.error) {
+        console.error('Extract error:', extractResult.error);
+        process.exitCode = 1;
+        return;
+    }
+
+    const extractedText = extractResult.text;
     console.log(`Extracted watermark: "${extractedText}" (Time: ${extractTime}ms)`);
 
     if (extractedText === watermarkText) {
