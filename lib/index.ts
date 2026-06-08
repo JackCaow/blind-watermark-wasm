@@ -59,9 +59,11 @@ interface WasmModule {
     redundancy: number
   ) => void;
   embedStringWatermark: (imageData: Uint8Array, watermarkText: string, outputFormat: string) => any;
-  extractStringWatermark: (imageData: Uint8Array, wmBitLength: number) => string;
+  // Returns { text } on success or { error } on failure.
+  extractStringWatermark: (imageData: Uint8Array, wmBitLength: number) => any;
   embedBinaryWatermark: (imageData: Uint8Array, watermarkBits: string, outputFormat: string) => any;
-  extractBinaryWatermark: (imageData: Uint8Array, wmBitLength: number) => string;
+  // Returns { bits } on success or { error } on failure.
+  extractBinaryWatermark: (imageData: Uint8Array, wmBitLength: number) => any;
   embedSelfDescribing: (imageData: Uint8Array, payload: Uint8Array, isText: boolean, outputFormat: string) => any;
   extractSelfDescribing: (imageData: Uint8Array) => any;
 }
@@ -157,8 +159,16 @@ export class BlindWatermark {
 
     this.applyConfig(module);
 
-    // Call WASM function
-    return module.extractStringWatermark(imageData, wmBitLength);
+    // Call WASM function. A decode/processing failure returns { error } rather
+    // than an empty string, so an undecodable image is not mistaken for an empty
+    // watermark.
+    const result = module.extractStringWatermark(imageData, wmBitLength);
+
+    if (result.error) {
+      throw new Error(result.error);
+    }
+
+    return result.text;
   }
 
   /**
@@ -173,6 +183,12 @@ export class BlindWatermark {
     bits: string,
     format: 'png' | 'jpg' | 'jpeg' | 'webp' = 'png'
   ): Promise<EmbedResult> {
+    // Reject malformed bit strings up front. Without this, stray characters used
+    // to be silently coerced to '0', embedding a wrong payload (e.g. "10x1" -> "1001").
+    if (!/^[01]+$/.test(bits)) {
+      throw new Error("bits must be a non-empty string of '0' and '1'");
+    }
+
     const module = await init();
 
     this.applyConfig(module);
@@ -201,8 +217,15 @@ export class BlindWatermark {
 
     this.applyConfig(module);
 
-    // Call WASM function
-    return module.extractBinaryWatermark(imageData, wmBitLength);
+    // Call WASM function. A decode/processing failure returns { error } rather
+    // than an empty string.
+    const result = module.extractBinaryWatermark(imageData, wmBitLength);
+
+    if (result.error) {
+      throw new Error(result.error);
+    }
+
+    return result.bits;
   }
 
   /**
@@ -236,12 +259,18 @@ export class BlindWatermark {
    * @param imageData - Image data as Uint8Array
    * @returns The extraction result, or `null` if no watermark was found
    *          (wrong password or no watermark). Check `.valid` for integrity.
+   * @throws If the input cannot be decoded as an image (an invalid file is a
+   *         failure, distinct from `null` which means "decoded fine, no watermark").
    */
   async extract(imageData: Uint8Array): Promise<ExtractResult | null> {
     const module = await init();
     this.applyConfig(module);
 
     const r = module.extractSelfDescribing(imageData);
+    // A decode/processing failure is an error, NOT "no watermark" — surface it so
+    // callers can tell an invalid file apart from a clean image. `null` is reserved
+    // for the wrong-password / no-watermark case below.
+    if (r.error) throw new Error(r.error);
     if (!r.found) return null;
 
     const bytes = new Uint8Array(r.payload);
@@ -265,6 +294,8 @@ export class BlindWatermark {
     this.applyConfig(module);
 
     const r = module.extractSelfDescribing(imageData);
+    // A decode/processing failure is an error, not a "no watermark" answer.
+    if (r.error) throw new Error(r.error);
     return {
       found: !!r.found,
       valid: !!r.valid,

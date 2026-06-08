@@ -1,6 +1,14 @@
 # blind-watermark-wasm
 
+[![npm version](https://img.shields.io/npm/v/blind-watermark-wasm.svg)](https://www.npmjs.com/package/blind-watermark-wasm)
+[![npm downloads](https://img.shields.io/npm/dm/blind-watermark-wasm.svg)](https://www.npmjs.com/package/blind-watermark-wasm)
+[![minzipped size](https://img.shields.io/bundlephobia/minzip/blind-watermark-wasm)](https://bundlephobia.com/package/blind-watermark-wasm)
+[![types](https://img.shields.io/npm/types/blind-watermark-wasm.svg)](https://www.npmjs.com/package/blind-watermark-wasm)
+[![license](https://img.shields.io/npm/l/blind-watermark-wasm.svg)](https://github.com/JackCaow/blind-watermark-wasm)
+
 DWT-DCT-SVD based blind watermarking for images using WebAssembly. Works in browsers and Node.js/Electron environments.
+
+**[🔗 Live demo](https://JackCaow.github.io/blind-watermark-wasm/)** &middot; **[📦 npm](https://www.npmjs.com/package/blind-watermark-wasm)** &middot; **[💻 Source](https://github.com/JackCaow/blind-watermark-wasm)**
 
 ## Features
 
@@ -52,7 +60,9 @@ const { found } = await bwm.detect(watermarked);
 
 `extract` returns `null` when no watermark is found (wrong password or none
 present), and `result.valid` is `false` if the payload checksum fails (e.g. heavy
-re-compression). Embed raw bytes by passing a `Uint8Array` instead of a string.
+re-compression). An input that can't be decoded as an image **throws** instead —
+an invalid file is a failure, never silently reported as "no watermark". Embed raw
+bytes by passing a `Uint8Array` instead of a string.
 
 ### Low-level: explicit-length API
 
